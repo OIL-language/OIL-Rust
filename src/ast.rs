@@ -1,48 +1,51 @@
+use crate::{parser::Token, types::DataType};
 use std::cmp::Eq;
-use crate::{
-    parser::Token,
-    types::DataType
-};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum AstKind<'a> {
-    Atom {
-        token: Token<'a>,
+pub enum AstKind<'src> {
+    Node {
+        token: Token<'src>,
     },
     Prefix {
-        oper: Token<'a>,
-        node: Box<Ast<'a>>,
+        oper: Token<'src>,
+        node: Box<Ast<'src>>,
     },
     Infix {
-        oper: Token<'a>,
-        lhs: Box<Ast<'a>>,
-        rhs: Box<Ast<'a>>,
+        oper: Token<'src>,
+        lhs: Box<Ast<'src>>,
+        rhs: Box<Ast<'src>>,
+    },
+    Assign {
+        lhs: Box<Ast<'src>>,
+        rhs: Box<Ast<'src>>
     },
     Block {
-        statements: Vec<Ast<'a>>,
+        scope_id: usize,
+        statements: Vec<Ast<'src>>,
     },
     FunctionCall {
-        name: Token<'a>,
-        arguments: Vec<Ast<'a>>,
+        lhs: Box<Ast<'src>>,
+        arguments: Vec<Ast<'src>>,
     },
     FunctionDefinition {
-        name: Token<'a>,
-        arguments: Vec<Ast<'a>>,
-        return_type: Box<Ast<'a>>,
-        body: Box<Ast<'a>>,
+        name: &'src str,
+        arguments: Vec<Ast<'src>>,
+        return_type: Box<Ast<'src>>,
+        body: Box<Ast<'src>>,
     },
     Declaration {
-        name: Token<'a>,
-        data_type: Box<Ast<'a>>,
-        value: Option<Box<Ast<'a>>>,
+        name: &'src str,
+        data_type: DataType,
+        value: Option<Box<Ast<'src>>>,
     },
     Return {
-        value: Box<Ast<'a>>,
-    }
+        value: Box<Ast<'src>>,
+    },
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Ast<'a> {
+pub struct Ast<'src> {
+    pub assignable: bool,
     pub data_type: DataType,
-    pub kind: AstKind<'a>,
+    pub kind: AstKind<'src>,
 }

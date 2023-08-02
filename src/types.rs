@@ -1,31 +1,32 @@
-use std::{
-    cmp::Eq,
-    error::Error,
-    fmt
-};
 use crate::{
-    ast::{AstKind, Ast},
+    ast::{Ast, AstKind},
+    parser::TokenKind,
+    symbol_table::SymbolTable,
     CompilerResult,
-    parser::{Token, TokenKind}
 };
+use std::{cmp::Eq, error::Error, fmt};
 
-pub enum TypeError {
+pub enum TypeError<'src> {
     TypeMismatch(DataType, DataType),
-    NotANumber(DataType),
+    NotANumber,
+    NotAssignable,
+    NotDefined(&'src str)
 }
 
-impl Error for TypeError {}
+impl Error for TypeError<'_> {}
 
-impl fmt::Debug for TypeError {
+impl fmt::Debug for TypeError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::TypeMismatch(a, b) => write!(f, "Mismatched types: {a:?} and {b:?}"),
-            Self::NotANumber(n) => write!(f, "Sorry, but {n:?} is not a number, so you can't do that with it :/"),
+            Self::NotANumber => write!(f, "This is not a number, so you can't do that with it :/"),
+            Self::NotAssignable => write!(f, "You cannot assign to this expression"),
+            Self::NotDefined(var_name) => write!(f, "Variable `{var_name}` was not defined")
         }
     }
 }
 
-impl fmt::Display for TypeError {
+impl fmt::Display for TypeError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -73,15 +74,15 @@ impl IntType {
 impl fmt::Debug for IntType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::S8 => write!(f, "s8"),
-            Self::S16 => write!(f, "s16"),
-            Self::S32 => write!(f, "s32"),
-            Self::S64 => write!(f, "s64"),
+            Self::S8  => write!(f, "S8"),
+            Self::S16 => write!(f, "S16"),
+            Self::S32 => write!(f, "S32"),
+            Self::S64 => write!(f, "S64"),
 
-            Self::U8 => write!(f, "u8"),
-            Self::U16 => write!(f, "u16"),
-            Self::U32 => write!(f, "u32"),
-            Self::U64 => write!(f, "u64"),
+            Self::U8  => write!(f, "U8"),
+            Self::U16 => write!(f, "U16"),
+            Self::U32 => write!(f, "U32"),
+            Self::U64 => write!(f, "U64"),
         }
     }
 }
@@ -110,47 +111,70 @@ impl fmt::Debug for DataType {
             Self::Void => write!(f, "void"),
             Self::Inferred(inferred) => write!(f, "{inferred:?}"),
             Self::Int(int) => write!(f, "{int:?}"),
-            Self::Ref(ref deref) => write!(f, "#{deref:?}"),
+            Self::Ref(deref) => write!(f, "#{deref:?}")
         }
     }
 }
 
-impl<'a> Ast<'a> {
-    pub fn new(mut kind: AstKind<'a>) -> CompilerResult<'a, Self> {
+impl<'src> Ast<'src> {
+    pub fn new(symbol_table: &SymbolTable<'src>, mut kind: AstKind<'src>) -> CompilerResult<'src, Self> {
+        let mut assignable = false;
+
         let data_type = match kind {
-            AstKind::Atom { ref token } => match token.kind {
+            AstKind::Node { ref token } => match token.kind {
                 TokenKind::Number(_) => DataType::Inferred(InferredType::Int),
-                TokenKind::Ident => DataType::Inferred(InferredType::Any),
+                TokenKind::Ident => {
+                    assignable = true;
+                    symbol_table.get_variable(token.text)
+                                .ok_or(TypeError::NotDefined(token.text))?
+                                .data_type
+                                .clone()
+                },
                 TokenKind::Str(_) => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
                 _ => unreachable!(),
             },
             AstKind::Prefix {
-                oper: Token {
-                    kind: TokenKind::Sub,
-                    ..
-                },
+                ref oper,
                 ref mut node,
             } => {
                 let node_data_type = node.data_type.clone();
 
-                let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = node_data_type else {
-                    Err(TypeError::NotANumber(node_data_type))?
-                };
+                if oper.kind == TokenKind::Sub {
+                    let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = node_data_type else {
+                        Err(TypeError::NotANumber)?
+                    };
+                }
 
                 node_data_type
-            },
+            }
             AstKind::Infix {
-                oper: Token {
-                    kind: TokenKind::Add
-                        | TokenKind::Sub
-                        | TokenKind::Mul
-                        | TokenKind::Div
-                        | TokenKind::Mod,
-                    ..
-                },
+                ref oper,
                 ref mut lhs,
                 ref mut rhs,
             } => {
+                lhs.infer(&rhs.data_type)?;
+                rhs.infer(&lhs.data_type)?;
+
+                if lhs.data_type != rhs.data_type {
+                    Err(TypeError::TypeMismatch(lhs.data_type.clone(), rhs.data_type.clone()))?
+                }
+
+                match oper.kind {
+                    | TokenKind::Add
+                    | TokenKind::Sub
+                    | TokenKind::Mul
+                    | TokenKind::Div
+                    | TokenKind::Mod => {
+                        let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = lhs.data_type else {
+                            Err(TypeError::NotANumber)?
+                        };
+                    },
+                    _ => {}
+                }
+
+                lhs.data_type.clone()
+            }
+            AstKind::Assign { ref mut lhs, ref mut rhs } => {
                 lhs.infer(&rhs.data_type)?;
                 rhs.infer(&lhs.data_type)?;
 
@@ -161,22 +185,43 @@ impl<'a> Ast<'a> {
                     ))?
                 }
 
-                let lhs_data_type = lhs.data_type.clone();
+                if !lhs.assignable {
+                    Err(TypeError::NotAssignable)?
+                }
 
-                let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = lhs_data_type else {
-                    Err(TypeError::NotANumber(lhs_data_type))?
-                };
+                DataType::Void
+            }
+            AstKind::Block { ref mut statements, .. } => {
+                let length = statements.len();
 
-                lhs_data_type
-            },
+                for (n, statement) in statements.iter_mut().enumerate() {
+                    if n + 1 < length {
+                        statement.infer(&DataType::Void)?;
+                    }
+                }
+
+                statements.last()
+                    .map_or(DataType::Void, |statement| statement.data_type.clone())
+            }
+            AstKind::Declaration { ref mut data_type, ref mut value, .. } => {
+                if let Some(ref mut value) = value {
+                    value.infer(&data_type)?;
+                }
+
+                DataType::Void
+            }
             _ => unreachable!(),
         };
 
-        Ok(Self { kind, data_type })
+        Ok(Self { assignable, kind, data_type })
     }
 
-    pub fn infer<'b>(&mut self, data_type: &'b DataType) -> CompilerResult<'a, ()> {
+    pub fn infer(&mut self, data_type: &DataType) -> CompilerResult<'src, ()> {
         let DataType::Inferred(inferred_type) = self.data_type else {
+            if let DataType::Inferred(_) = data_type {
+                return Ok(());
+            }
+
             if data_type != &self.data_type {
                 Err(TypeError::TypeMismatch(data_type.clone(), self.data_type.clone()))?
             }
@@ -187,10 +232,10 @@ impl<'a> Ast<'a> {
         match &inferred_type {
             InferredType::Int => {
                 let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = data_type else {
-                    Err(TypeError::TypeMismatch(DataType::Inferred(inferred_type), self.data_type.clone()))?
+                    Err(TypeError::TypeMismatch(DataType::Inferred(inferred_type), data_type.clone()))?
                 };
             }
-            InferredType::Any => {}
+            _ => {}
         }
 
         match &mut self.kind {
@@ -202,6 +247,15 @@ impl<'a> Ast<'a> {
             } => {
                 lhs.infer(data_type)?;
                 rhs.infer(data_type)?;
+            }
+            AstKind::Block { ref mut statements, .. } => {
+                let Some(statement) = statements.last_mut() else {
+                    unreachable!("If we got here, it means the type of this AST is inferred.\n\
+                                  But, if the list of block statements is empty, the type must not be inferred, but instead set to void.\n\
+                                  Therefore, this situation is impossible and this statement unreachable.")
+                };
+
+                statement.infer(data_type)?;
             }
             _ => {}
         }

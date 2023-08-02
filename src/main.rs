@@ -2,6 +2,7 @@ use oil::{
     bytecode::ByteCode,
     compiler::Compiler,
     parser::Parser,
+    symbol_table::SymbolTable,
     types::{DataType, IntType},
     CompilerResult,
 };
@@ -12,15 +13,17 @@ use std::{
 };
 
 fn compile(file: &str) -> CompilerResult<ByteCode<'_>> {
-    let mut compiler = Compiler::new();
+    let mut symbol_table = SymbolTable::new();
 
-    let mut ast = Parser::new(file).parse()?;
+    let mut ast = Parser::new(file).parse(&mut symbol_table)?;
 
-    ast.infer(&DataType::Int(IntType::U64))?;
+    if let DataType::Inferred(_) = ast.data_type {
+        ast.infer(&DataType::Int(IntType::U32))?;
+    }
 
-    compiler.compile(ast);
+    println!("{ast:#?} {} {:?}", symbol_table.scope_id, symbol_table.scopes);
 
-    Ok(compiler.bytecode)
+    Ok(Compiler::compile(ast, symbol_table))
 }
 
 fn main() -> CompilerResult<'static, ()> {
