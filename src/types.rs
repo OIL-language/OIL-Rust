@@ -90,6 +90,7 @@ impl fmt::Debug for IntType {
 #[derive(PartialEq, Eq, Clone)]
 pub enum DataType {
     Void,
+    Bool,
     Inferred(InferredType),
     Int(IntType),
     Ref(Box<Self>),
@@ -99,6 +100,7 @@ impl DataType {
     pub fn size(&self) -> usize {
         match self {
             Self::Void => 0,
+            Self::Bool => 1,
             Self::Int(int_type) => int_type.size(),
             _ => unreachable!(),
         }
@@ -108,7 +110,8 @@ impl DataType {
 impl fmt::Debug for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Void => write!(f, "void"),
+            Self::Void => write!(f, "Void"),
+            Self::Bool => write!(f, "Bool"),
             Self::Inferred(inferred) => write!(f, "{inferred:?}"),
             Self::Int(int) => write!(f, "{int:?}"),
             Self::Ref(deref) => write!(f, "#{deref:?}")
@@ -131,6 +134,7 @@ impl<'src> Ast<'src> {
                                 .clone()
                 },
                 TokenKind::Str(_) => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
+                TokenKind::True | TokenKind::False => DataType::Bool,
                 _ => unreachable!(),
             },
             AstKind::Prefix {
@@ -141,7 +145,7 @@ impl<'src> Ast<'src> {
 
                 if oper.kind == TokenKind::Sub {
                     let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = node_data_type else {
-                        Err(TypeError::NotANumber)?
+                        return Err(TypeError::NotANumber.into());
                     };
                 }
 
@@ -156,7 +160,7 @@ impl<'src> Ast<'src> {
                 rhs.infer(&lhs.data_type)?;
 
                 if lhs.data_type != rhs.data_type {
-                    Err(TypeError::TypeMismatch(lhs.data_type.clone(), rhs.data_type.clone()))?
+                    return Err(TypeError::TypeMismatch(lhs.data_type.clone(), rhs.data_type.clone()).into());
                 }
 
                 match oper.kind {
@@ -166,7 +170,7 @@ impl<'src> Ast<'src> {
                     | TokenKind::Div
                     | TokenKind::Mod => {
                         let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = lhs.data_type else {
-                            Err(TypeError::NotANumber)?
+                            return Err(TypeError::NotANumber.into());
                         };
                     },
                     _ => {}
@@ -186,7 +190,7 @@ impl<'src> Ast<'src> {
                 }
 
                 if !lhs.assignable {
-                    Err(TypeError::NotAssignable)?
+                    return Err(TypeError::NotAssignable.into());
                 }
 
                 DataType::Void
@@ -203,12 +207,29 @@ impl<'src> Ast<'src> {
                 statements.last()
                     .map_or(DataType::Void, |statement| statement.data_type.clone())
             }
-            AstKind::Declaration { ref mut data_type, ref mut value, .. } => {
-                if let Some(ref mut value) = value {
-                    value.infer(&data_type)?;
-                }
+            AstKind::Declaration { ref data_type, ref mut value, .. } => {
+                value.as_mut().map_or(Ok(()), |value| value.infer(data_type))?;
 
                 DataType::Void
+            }
+            AstKind::IfStatement { ref mut condition, ref mut if_block, ref mut else_block } => {
+                condition.infer(&DataType::Bool)?;
+
+                if let Some(ref mut else_block) = else_block {
+                    if_block.infer(&else_block.data_type)?;
+                    else_block.infer(&if_block.data_type)?;
+
+                    if if_block.data_type != else_block.data_type {
+                        return Err(TypeError::TypeMismatch(
+                            if_block.data_type.clone(),
+                            else_block.data_type.clone()
+                        ).into());
+                    }
+                } else {
+                    if_block.infer(&DataType::Void)?;
+                }
+
+                if_block.data_type.clone()
             }
             _ => unreachable!(),
         };
@@ -223,7 +244,7 @@ impl<'src> Ast<'src> {
             }
 
             if data_type != &self.data_type {
-                Err(TypeError::TypeMismatch(data_type.clone(), self.data_type.clone()))?
+                return Err(TypeError::TypeMismatch(data_type.clone(), self.data_type.clone()).into());
             }
 
             return Ok(());
@@ -232,7 +253,7 @@ impl<'src> Ast<'src> {
         match &inferred_type {
             InferredType::Int => {
                 let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = data_type else {
-                    Err(TypeError::TypeMismatch(DataType::Inferred(inferred_type), data_type.clone()))?
+                    return Err(TypeError::TypeMismatch(DataType::Inferred(inferred_type), data_type.clone()).into());
                 };
             }
             _ => {}
@@ -257,6 +278,14 @@ impl<'src> Ast<'src> {
 
                 statement.infer(data_type)?;
             }
+            AstKind::IfStatement { ref mut if_block, ref mut else_block, .. } => {
+                if let Some(ref mut else_block) = else_block {
+                    if_block.infer(data_type)?;
+                    else_block.infer(data_type)?;
+                } else {
+                    if_block.infer(&DataType::Void)?;
+                }
+            },
             _ => {}
         }
 

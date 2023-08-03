@@ -1,11 +1,11 @@
 use crate::types::{DataType, IntType};
 
 fn nasm_oper_text(data_type: &DataType) -> &str {
-    match data_type {
-        DataType::Int(IntType::U8 | IntType::S8) => "byte",
-        DataType::Int(IntType::U16 | IntType::S16) => "word",
-        DataType::Int(IntType::U32 | IntType::S32) => "dword",
-        DataType::Int(IntType::U64 | IntType::S64) | DataType::Ref(_) => "qword",
+    match data_type.size() {
+        1 => "byte",
+        2 => "word",
+        4 => "dword",
+        8 => "qword",
         _ => unreachable!(),
     }
 }
@@ -42,17 +42,19 @@ impl NasmRegister {
             Self::R11 => &["r11b", "r11d", "r11w", "r11"],
         };
 
-        match data_type {
-            DataType::Int(IntType::U8 | IntType::S8) => text_options[0],
-            DataType::Int(IntType::U16 | IntType::S16) => text_options[1],
-            DataType::Int(IntType::U32 | IntType::S32) => text_options[2],
-            DataType::Int(IntType::U64 | IntType::S64) | DataType::Ref(_) => text_options[3],
+        text_options[match data_type.size() {
+            1 => 0,
+            2 => 1,
+            4 => 2,
+            8 => 3,
             _ => unreachable!(),
-        }
+        }]
     }
 }
 
 pub type RegisterID = usize;
+
+pub type LabelID = usize;
 
 #[derive(Debug, Clone)]
 pub struct Register {
@@ -64,6 +66,7 @@ pub struct Register {
 pub enum Argument {
     Constant { value: u64 },
     Register(RegisterID),
+    NullRegister
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -75,6 +78,10 @@ pub enum OpCode {
     Div { dst: Argument, src: Argument },
     Mod { dst: Argument, src: Argument },
     Deref { dst: Argument, src: Argument },
+    Label { label_id: LabelID },
+    Goto { label_id: LabelID },
+    GotoIfZero { condition: Argument, label_id: LabelID },
+    GotoIfNotZero { condition: Argument, label_id: LabelID }
 }
 
 impl OpCode {
@@ -85,6 +92,9 @@ impl OpCode {
             Self::Sub { .. } => "sub",
             Self::Mul { .. } => "mul",
             Self::Div { .. } => "div",
+            Self::Goto { .. } => "jmp",
+            Self::GotoIfZero { .. } => "jz",
+            Self::GotoIfNotZero { .. } => "jnz",
             _ => unreachable!(),
         }
     }
@@ -93,6 +103,8 @@ impl OpCode {
 #[derive(Debug)]
 pub struct Function<'src> {
     name: &'src str,
+    label_id: LabelID,
+    pub return_value: RegisterID,
     registers: Vec<Register>,
     opcodes: Vec<OpCode>,
 }
@@ -101,23 +113,25 @@ impl<'src> Function<'src> {
     pub fn new(name: &'src str, return_type: DataType) -> Self {
         let mut function = Self {
             name,
+            label_id: 0,
+            return_value: 0,
             registers: Vec::new(),
             opcodes: Vec::new(),
         };
 
-        function.add_register(return_type);
+        function.return_value = function.add_register(return_type);
 
         function
     }
 
     pub fn stack_size(&self) -> usize {
-        self.registers
+        self.return_value + self.registers
             .iter()
             .last()
             .map_or(0, |register| register.stack_pos + register.data_type.size())
     }
 
-    pub fn add_register(&mut self, data_type: DataType) -> usize {
+    pub fn add_register(&mut self, data_type: DataType) -> RegisterID {
         self.registers.push(Register {
             data_type,
             stack_pos: self.stack_size(),
@@ -126,7 +140,15 @@ impl<'src> Function<'src> {
         self.registers.len() - 1
     }
 
-    pub fn get_register(&mut self, id: RegisterID) -> &Register {
+    pub fn add_label(&mut self) -> LabelID {
+        let prev_label_id = self.label_id;
+
+        self.label_id += 1;
+
+        prev_label_id
+    }
+
+    pub fn get_register(&self, id: RegisterID) -> &Register {
         &self.registers[id]
     }
 
@@ -144,15 +166,16 @@ impl<'src> Function<'src> {
                     nasm_oper_text(&register.data_type),
                     register.stack_pos
                 )
-            }
+            },
+            _ => unreachable!()
         }
     }
 
     fn compile_nasm_opcode(&self, opcode: OpCode) -> String {
-        let instruction = opcode.nasm_instruction();
-
         match opcode {
             OpCode::Mov { dst, src } | OpCode::Add { dst, src } | OpCode::Sub { dst, src } => {
+                let instruction = opcode.nasm_instruction();
+
                 let dst_register = match dst {
                     Argument::Register(register) => &self.registers[register],
                     _ => unreachable!(),
@@ -169,8 +192,10 @@ impl<'src> Function<'src> {
                 } else {
                     format!("    {instruction} {dst_compiled}, {src_compiled}")
                 }
-            }
+            },
             OpCode::Mul { dst, src } | OpCode::Div { dst, src } => {
+                let instruction = opcode.nasm_instruction();
+
                 let dst_register = match dst {
                     Argument::Register(register) => &self.registers[register],
                     _ => unreachable!(),
@@ -182,7 +207,22 @@ impl<'src> Function<'src> {
                 let rbx = NasmRegister::Rbx.register_text(&dst_register.data_type);
 
                 format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    {instruction} {rbx}\n    mov {dst_compiled}, {rax}")
-            }
+            },
+            OpCode::Label { label_id } => format!(".L{label_id}:"),
+            OpCode::Goto { label_id } => format!("    jmp .L{label_id}"),
+            OpCode::GotoIfZero { condition, label_id } | OpCode::GotoIfNotZero { condition, label_id } => {
+                let instruction = opcode.nasm_instruction();
+
+                let condition_compiled = self.compile_nasm_argument(condition);
+
+                let rax = if let Argument::Register(register) = condition {
+                    NasmRegister::Rax.register_text(&self.registers[register].data_type)
+                } else {
+                    NasmRegister::Rax.register_text(&DataType::Int(IntType::U8))
+                };
+
+                format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    {instruction} .L{label_id}")
+            },
             _ => todo!(),
         }
     }
@@ -195,9 +235,10 @@ impl<'src> Function<'src> {
             .collect::<String>();
 
         format!(
-            "{}:\n    enter {}, 0\n{code}    mov rax, [rsp]\n    leave\n    ret\n",
+            "{}:\n    enter {}, 0\n{code}    mov rax, [rsp + {}]\n    leave\n    ret\n",
             self.name,
-            self.stack_size()
+            self.stack_size(),
+            self.get_register(self.return_value).stack_pos,
         )
     }
 }

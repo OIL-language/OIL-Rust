@@ -15,11 +15,7 @@ pub struct SymbolTable<'src> {
 
 impl<'src> SymbolTable<'src> {
     pub fn new() -> Self {
-        Self {
-            scope_id: 0,
-            variables: HashMap::new(),
-            scopes: vec![0]
-        }
+        Self::default()
     }
 
     pub fn add_variable(&mut self, name: &'src str, variable: Variable) {
@@ -70,5 +66,15 @@ impl<'src> SymbolTable<'src> {
 
     pub fn leave_scope(&mut self) {
         self.scope_id = self.scopes[self.scope_id];
+    }
+}
+
+impl<'src> Default for SymbolTable<'src> {
+    fn default() -> Self {
+        Self {
+            scope_id: 0,
+            variables: HashMap::new(),
+            scopes: vec![0]
+        }
     }
 }

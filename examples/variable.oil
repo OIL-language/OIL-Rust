@@ -1,0 +1,7 @@
+{
+    let a: U32 = 6;
+    let b: U32 = 5;
+    let c: U32 = 2;
+
+    a * a + b * b + c * c * c
+}

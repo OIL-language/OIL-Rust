@@ -38,6 +38,11 @@ pub enum AstKind<'src> {
         data_type: DataType,
         value: Option<Box<Ast<'src>>>,
     },
+    IfStatement {
+        condition: Box<Ast<'src>>,
+        if_block: Box<Ast<'src>>,
+        else_block: Option<Box<Ast<'src>>>,
+    },
     Return {
         value: Box<Ast<'src>>,
     },

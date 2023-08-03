@@ -27,14 +27,18 @@ pub enum TokenKind<'src> {
     Equals,
     Function,
     Let,
+    If,
+    Else,
     Return,
+    True,
+    False,
 }
 
 impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
             Self::Sub => Some(5),
-            _ => None,
+            _ => None
         }
     }
 
@@ -47,7 +51,7 @@ impl<'src> TokenKind<'src> {
     }
 
     fn is_node(&self) -> bool {
-        matches!(self, Self::Ident | Self::Number(_) | Self::Str(_))
+        matches!(self, Self::Ident | Self::Number(_) | Self::Str(_) | Self::True | Self::False)
     }
 }
 
@@ -79,7 +83,11 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::Equals => write!(f, "="),
             TokenKind::Function => write!(f, "fn"),
             TokenKind::Let => write!(f, "let"),
+            TokenKind::If => write!(f, "if"),
+            TokenKind::Else => write!(f, "else"),
             TokenKind::Return => write!(f, "return"),
+            TokenKind::True => write!(f, "true"),
+            TokenKind::False => write!(f, "false"),
         }
     }
 }
@@ -194,7 +202,11 @@ impl<'src> Parser<'src> {
                     kind: match text {
                         "fn" => TokenKind::Function,
                         "let" => TokenKind::Let,
+                        "if" => TokenKind::If,
+                        "else" => TokenKind::Else,
                         "return" => TokenKind::Return,
+                        "true" => TokenKind::True,
+                        "false" => TokenKind::False,
                         _ => TokenKind::Ident,
                     },
                 }));
@@ -224,7 +236,7 @@ impl<'src> Parser<'src> {
                     self.advance(&mut pos);
 
                     if self.chars.peek().is_none() {
-                        Err(ParseError::UnclosedString)?;
+                        return Err(ParseError::UnclosedString.into());
                     }
                 }
 
@@ -258,7 +270,7 @@ impl<'src> Parser<'src> {
                     ';' => TokenKind::SemiColon,
                     '=' => TokenKind::Equals,
                     ':' => TokenKind::Colon,
-                    other => Err(ParseError::InvalidChar(other))?,
+                    other => return Err(ParseError::InvalidChar(other).into()),
                 },
             }));
         }
@@ -280,7 +292,7 @@ impl<'src> Parser<'src> {
         if token.kind == kind {
             Ok(token)
         } else {
-            Err(ParseError::UnexpectedToken(Some(token)))?
+            return Err(ParseError::UnexpectedToken(Some(token)).into());
         }
     }
 
@@ -328,6 +340,8 @@ impl<'src> Parser<'src> {
 
         let mut statements: Vec<Ast<'src>> = Vec::new();
 
+        self.read_token()?;
+
         loop {
             if let Some(Token { kind: TokenKind::RCurly, .. }) = self.peek_token()? {
                 break;
@@ -338,13 +352,13 @@ impl<'src> Parser<'src> {
             statements.push(statement);
 
             let Some(peek) = self.peek_token()? else {
-                Err(ParseError::UnexpectedToken(None))?
+                return Err(ParseError::UnexpectedToken(None).into());
             };
 
             match peek.kind {
                 TokenKind::RCurly => break,
                 TokenKind::SemiColon => self.read_token()?,
-                _ => Err(ParseError::UnexpectedToken(Some(peek)))?
+                _ => return Err(ParseError::UnexpectedToken(Some(peek)).into())
             };
         }
 
@@ -357,11 +371,13 @@ impl<'src> Parser<'src> {
 
     fn parse_data_type(&mut self) -> CompilerResult<'src, DataType> {
         let Some(token) = self.read_token()? else {
-            Err(ParseError::UnexpectedToken(None))?
+            return Err(ParseError::UnexpectedToken(None).into());
         };
 
         let data_type = if token.kind == TokenKind::Ident {
             match token.text {
+                "Void"   => DataType::Void,
+                "Bool"   => DataType::Bool,
                 "S8"     => DataType::Int(IntType::S8),
                 "S16"    => DataType::Int(IntType::S16),
                 "S32"    => DataType::Int(IntType::S32),
@@ -371,42 +387,74 @@ impl<'src> Parser<'src> {
                 "U32"    => DataType::Int(IntType::U32),
                 "U64"    => DataType::Int(IntType::U64),
                 "String" => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
-                _ => Err(ParseError::UnexpectedToken(Some(token)))?
+                _        => return Err(ParseError::UnexpectedToken(Some(token)).into())
             }
         } else {
-            Err(ParseError::UnexpectedToken(Some(token)))?
+            return Err(ParseError::UnexpectedToken(Some(token)).into());
         };
 
         Ok(data_type)
     }
 
     fn parse_expr_bp(&mut self, symbol_table: &mut SymbolTable<'src>, min_bp: usize) -> CompilerResult<'src, Ast<'src>> {
-        let Some(token) = self.read_token()? else {
-            Err(ParseError::UnexpectedToken(None))?
-        };
+        let token = self.peek_token()?.ok_or(ParseError::UnexpectedToken(None))?;
 
-        let mut lhs = if let Some(prefix_right_bp) = token.kind.prefix_bp() {
-            let node = self.parse_expr_bp(symbol_table, prefix_right_bp)?;
+        let mut lhs = match &token.kind {
+            TokenKind::LParen => {
+                self.read_token()?;
 
-            Ast::new(
-                symbol_table,
-                AstKind::Prefix {
-                    oper: token,
-                    node: Box::new(node),
-                }
-            )?
-        } else if token.kind.is_node() {
-            Ast::new(symbol_table, AstKind::Node { token })?
-        } else if let TokenKind::LParen = token.kind {
-            let inside = self.parse_expr_bp(symbol_table, 0)?;
+                let inside = self.parse_expr_bp(symbol_table, 0)?;
 
-            self.expect(TokenKind::RParen)?;
+                self.expect(TokenKind::RParen)?;
 
-            inside
-        } else if let TokenKind::LCurly = token.kind {
-            self.parse_block(symbol_table)?
-        } else {
-            Err(ParseError::UnexpectedToken(Some(token)))?
+                inside
+            },
+            TokenKind::LCurly => self.parse_block(symbol_table)?,
+            TokenKind::If => {
+                self.read_token()?;
+                let condition = self.parse_expr_bp(symbol_table, 0)?;
+
+                let if_block = self.parse_block(symbol_table)?;
+
+                let else_block = if let Some(Token { kind: TokenKind::Else, .. }) = self.peek_token()? {
+                    self.read_token()?;
+
+                    Some(Box::new(self.parse_block(symbol_table)?))
+                } else {
+                    None
+                };
+
+                Ast::new(
+                    symbol_table,
+                    AstKind::IfStatement {
+                        condition: Box::new(condition),
+                        if_block: Box::new(if_block),
+                        else_block
+                    }
+                )?
+            },
+            kind if kind.is_node() => {
+                self.read_token()?;
+
+                Ast::new(symbol_table, AstKind::Node { token })?
+            },
+            other => {
+                self.read_token()?;
+
+                let Some(prefix_bp) = other.prefix_bp() else {
+                    return Err(ParseError::UnexpectedToken(Some(token)).into());
+                };
+
+                let node = self.parse_expr_bp(symbol_table, prefix_bp)?;
+
+                Ast::new(
+                    symbol_table,
+                    AstKind::Prefix {
+                        oper: token,
+                        node: Box::new(node),
+                    }
+                )?
+            }
         };
 
         loop {
@@ -443,7 +491,7 @@ impl<'src> Parser<'src> {
         let expression = self.parse_expr_bp(symbol_table, 0)?;
 
         if let Some(token) = self.read_token()? {
-            Err(ParseError::UnexpectedToken(Some(token)))?
+            return Err(ParseError::UnexpectedToken(Some(token)).into());
         };
 
         Ok(expression)

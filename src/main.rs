@@ -3,7 +3,6 @@ use oil::{
     compiler::Compiler,
     parser::Parser,
     symbol_table::SymbolTable,
-    types::{DataType, IntType},
     CompilerResult,
 };
 use std::{
@@ -15,13 +14,7 @@ use std::{
 fn compile(file: &str) -> CompilerResult<ByteCode<'_>> {
     let mut symbol_table = SymbolTable::new();
 
-    let mut ast = Parser::new(file).parse(&mut symbol_table)?;
-
-    if let DataType::Inferred(_) = ast.data_type {
-        ast.infer(&DataType::Int(IntType::U32))?;
-    }
-
-    println!("{ast:#?} {} {:?}", symbol_table.scope_id, symbol_table.scopes);
+    let ast = Parser::new(file).parse(&mut symbol_table)?;
 
     Ok(Compiler::compile(ast, symbol_table))
 }
@@ -32,7 +25,7 @@ fn main() -> CompilerResult<'static, ()> {
     assert!(args.next().is_some());
 
     let Some(input_file_path) = args.next() else {
-        Err("Not enough arguments provided.")?
+        return Err("Not enough arguments provided.".into());
     };
 
     let input_file = fs::read_to_string(input_file_path)?;
