@@ -23,16 +23,6 @@ pub enum AstKind<'src> {
         scope_id: usize,
         statements: Vec<Ast<'src>>,
     },
-    FunctionCall {
-        lhs: Box<Ast<'src>>,
-        arguments: Vec<Ast<'src>>,
-    },
-    FunctionDefinition {
-        name: &'src str,
-        arguments: Vec<Ast<'src>>,
-        return_type: Box<Ast<'src>>,
-        body: Box<Ast<'src>>,
-    },
     Declaration {
         name: &'src str,
         data_type: DataType,
@@ -43,8 +33,9 @@ pub enum AstKind<'src> {
         if_block: Box<Ast<'src>>,
         else_block: Option<Box<Ast<'src>>>,
     },
-    Return {
-        value: Box<Ast<'src>>,
+    WhileLoop {
+        condition: Box<Ast<'src>>,
+        body: Box<Ast<'src>>,
     },
 }
 

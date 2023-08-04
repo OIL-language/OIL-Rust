@@ -25,11 +25,10 @@ pub enum TokenKind<'src> {
     SemiColon,
     Colon,
     Equals,
-    Function,
     Let,
     If,
     Else,
-    Return,
+    While,
     True,
     False,
 }
@@ -81,11 +80,10 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::SemiColon => write!(f, ";"),
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Equals => write!(f, "="),
-            TokenKind::Function => write!(f, "fn"),
             TokenKind::Let => write!(f, "let"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
-            TokenKind::Return => write!(f, "return"),
+            TokenKind::While => write!(f, "while"),
             TokenKind::True => write!(f, "true"),
             TokenKind::False => write!(f, "false"),
         }
@@ -200,11 +198,10 @@ impl<'src> Parser<'src> {
                 return Ok(Some(Token {
                     text,
                     kind: match text {
-                        "fn" => TokenKind::Function,
                         "let" => TokenKind::Let,
                         "if" => TokenKind::If,
                         "else" => TokenKind::Else,
-                        "return" => TokenKind::Return,
+                        "while" => TokenKind::While,
                         "true" => TokenKind::True,
                         "false" => TokenKind::False,
                         _ => TokenKind::Ident,
@@ -396,6 +393,47 @@ impl<'src> Parser<'src> {
         Ok(data_type)
     }
 
+    fn parse_if_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+        self.expect(TokenKind::If)?;
+
+        let condition = self.parse_expr_bp(symbol_table, 0)?;
+
+        let if_block = self.parse_block(symbol_table)?;
+
+        let else_block = if let Some(Token { kind: TokenKind::Else, .. }) = self.peek_token()? {
+            self.read_token()?;
+
+            Some(Box::new(self.parse_block(symbol_table)?))
+        } else {
+            None
+        };
+
+        Ast::new(
+            symbol_table,
+            AstKind::IfStatement {
+                condition: Box::new(condition),
+                if_block: Box::new(if_block),
+                else_block
+            }
+        )
+    }
+
+    fn parse_while_loop(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+        self.expect(TokenKind::While)?;
+
+        let condition = self.parse_expr_bp(symbol_table, 0)?;
+
+        let body = self.parse_block(symbol_table)?;
+
+        Ast::new(
+            symbol_table,
+            AstKind::WhileLoop {
+                condition: Box::new(condition),
+                body: Box::new(body)
+            }
+        )
+    }
+
     fn parse_expr_bp(&mut self, symbol_table: &mut SymbolTable<'src>, min_bp: usize) -> CompilerResult<'src, Ast<'src>> {
         let token = self.peek_token()?.ok_or(ParseError::UnexpectedToken(None))?;
 
@@ -410,29 +448,8 @@ impl<'src> Parser<'src> {
                 inside
             },
             TokenKind::LCurly => self.parse_block(symbol_table)?,
-            TokenKind::If => {
-                self.read_token()?;
-                let condition = self.parse_expr_bp(symbol_table, 0)?;
-
-                let if_block = self.parse_block(symbol_table)?;
-
-                let else_block = if let Some(Token { kind: TokenKind::Else, .. }) = self.peek_token()? {
-                    self.read_token()?;
-
-                    Some(Box::new(self.parse_block(symbol_table)?))
-                } else {
-                    None
-                };
-
-                Ast::new(
-                    symbol_table,
-                    AstKind::IfStatement {
-                        condition: Box::new(condition),
-                        if_block: Box::new(if_block),
-                        else_block
-                    }
-                )?
-            },
+            TokenKind::If => self.parse_if_statement(symbol_table)?,
+            TokenKind::While => self.parse_while_loop(symbol_table)?,
             kind if kind.is_node() => {
                 self.read_token()?;
 

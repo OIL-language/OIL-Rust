@@ -1,4 +1,4 @@
-use crate::types::{DataType, IntType};
+use crate::types::DataType;
 
 fn nasm_oper_text(data_type: &DataType) -> &str {
     match data_type.size() {
@@ -62,14 +62,14 @@ pub struct Register {
     pub stack_pos: usize,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Argument {
-    Constant { value: u64 },
+    Constant { value: u64, data_type: DataType },
     Register(RegisterID),
     NullRegister
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum OpCode {
     Mov { dst: Argument, src: Argument },
     Add { dst: Argument, src: Argument },
@@ -77,27 +77,12 @@ pub enum OpCode {
     Mul { dst: Argument, src: Argument },
     Div { dst: Argument, src: Argument },
     Mod { dst: Argument, src: Argument },
+    Negate { dst: Argument },
     Deref { dst: Argument, src: Argument },
     Label { label_id: LabelID },
     Goto { label_id: LabelID },
     GotoIfZero { condition: Argument, label_id: LabelID },
     GotoIfNotZero { condition: Argument, label_id: LabelID }
-}
-
-impl OpCode {
-    fn nasm_instruction(&self) -> &str {
-        match self {
-            Self::Mov { .. } => "mov",
-            Self::Add { .. } => "add",
-            Self::Sub { .. } => "sub",
-            Self::Mul { .. } => "mul",
-            Self::Div { .. } => "div",
-            Self::Goto { .. } => "jmp",
-            Self::GotoIfZero { .. } => "jz",
-            Self::GotoIfNotZero { .. } => "jnz",
-            _ => unreachable!(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -152,15 +137,23 @@ impl<'src> Function<'src> {
         &self.registers[id]
     }
 
+    pub fn argument_data_type(&self, argument: &'src Argument) -> &DataType {
+        match argument {
+            Argument::Constant { data_type, .. } => &data_type,
+            Argument::Register(register_id) => &self.registers[*register_id].data_type,
+            Argument::NullRegister => unreachable!()
+        }
+    }
+
     pub fn add_opcode(&mut self, opcode: OpCode) {
         self.opcodes.push(opcode);
     }
 
-    fn compile_nasm_argument(&self, argument: Argument) -> String {
+    fn compile_nasm_argument(&self, argument: &Argument) -> String {
         match argument {
-            Argument::Constant { value } => value.to_string(),
+            Argument::Constant { value, .. } => value.to_string(),
             Argument::Register(register) => {
-                let register = &self.registers[register];
+                let register = &self.registers[*register];
                 format!(
                     "{} [rsp + {}]",
                     nasm_oper_text(&register.data_type),
@@ -171,57 +164,86 @@ impl<'src> Function<'src> {
         }
     }
 
-    fn compile_nasm_opcode(&self, opcode: OpCode) -> String {
+    fn compile_nasm_opcode(&self, opcode: &OpCode) -> String {
         match opcode {
-            OpCode::Mov { dst, src } | OpCode::Add { dst, src } | OpCode::Sub { dst, src } => {
-                let instruction = opcode.nasm_instruction();
+            OpCode::Mov { dst, src } => {
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(&dst));
 
-                let dst_register = match dst {
-                    Argument::Register(register) => &self.registers[register],
-                    _ => unreachable!(),
-                };
-                let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument(dst);
-
-                let rax = NasmRegister::Rax.register_text(&dst_register.data_type);
+                let src_compiled = self.compile_nasm_argument(&src);
+                let dst_compiled = self.compile_nasm_argument(&dst);
 
                 if let Argument::Register(_) = src {
-                    format!(
-                        "    mov {rax}, {src_compiled}\n    {instruction} {dst_compiled}, {rax}"
-                    )
+                    format!("    mov {rax}, {src_compiled}\n    mov {dst_compiled}, {rax}")
                 } else {
-                    format!("    {instruction} {dst_compiled}, {src_compiled}")
+                    format!("    mov {dst_compiled}, {src_compiled}")
                 }
             },
-            OpCode::Mul { dst, src } | OpCode::Div { dst, src } => {
-                let instruction = opcode.nasm_instruction();
+            OpCode::Add { dst, src } => {
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(&dst));
 
-                let dst_register = match dst {
-                    Argument::Register(register) => &self.registers[register],
-                    _ => unreachable!(),
-                };
-                let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let src_compiled = self.compile_nasm_argument(&src);
+                let dst_compiled = self.compile_nasm_argument(&dst);
 
-                let rax = NasmRegister::Rax.register_text(&dst_register.data_type);
-                let rbx = NasmRegister::Rbx.register_text(&dst_register.data_type);
+                if let Argument::Register(_) = src {
+                    format!("    mov {rax}, {src_compiled}\n    add {dst_compiled}, {rax}")
+                } else {
+                    format!("    add {dst_compiled}, {src_compiled}")
+                }
+            },
+            OpCode::Sub { dst, src } => {
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(&dst));
 
-                format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    {instruction} {rbx}\n    mov {dst_compiled}, {rax}")
+                let src_compiled = self.compile_nasm_argument(&src);
+                let dst_compiled = self.compile_nasm_argument(&dst);
+
+                if let Argument::Register(_) = src {
+                    format!("    mov {rax}, {src_compiled}\n    sub {dst_compiled}, {rax}")
+                } else {
+                    format!("    sub {dst_compiled}, {src_compiled}")
+                }
+            },
+            OpCode::Mul { dst, src } => {
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(&dst));
+                let rbx = NasmRegister::Rbx.register_text(self.argument_data_type(&dst));
+
+                let src_compiled = self.compile_nasm_argument(&src);
+                let dst_compiled = self.compile_nasm_argument(&dst);
+
+                format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    mul {rbx}\n    mov {dst_compiled}, {rax}")
+            },
+            OpCode::Div { dst, src } => {
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(&dst));
+                let rbx = NasmRegister::Rbx.register_text(self.argument_data_type(&dst));
+
+                let src_compiled = self.compile_nasm_argument(&src);
+                let dst_compiled = self.compile_nasm_argument(&dst);
+
+                format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rax}")
+            },
+            OpCode::Negate { dst } => {
+                let dst_compiled = self.compile_nasm_argument(&dst);
+
+                format!("neg {dst_compiled}")
             },
             OpCode::Label { label_id } => format!(".L{label_id}:"),
             OpCode::Goto { label_id } => format!("    jmp .L{label_id}"),
-            OpCode::GotoIfZero { condition, label_id } | OpCode::GotoIfNotZero { condition, label_id } => {
-                let instruction = opcode.nasm_instruction();
+            OpCode::GotoIfZero { condition, label_id } => {
+                assert!(*self.argument_data_type(&condition) == DataType::Bool);
 
-                let condition_compiled = self.compile_nasm_argument(condition);
+                let rax = NasmRegister::Rax.register_text(&DataType::Bool);
 
-                let rax = if let Argument::Register(register) = condition {
-                    NasmRegister::Rax.register_text(&self.registers[register].data_type)
-                } else {
-                    NasmRegister::Rax.register_text(&DataType::Int(IntType::U8))
-                };
+                let condition_compiled = self.compile_nasm_argument(&condition);
 
-                format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    {instruction} .L{label_id}")
+                format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    jz .L{label_id}")
+            },
+            OpCode::GotoIfNotZero { condition, label_id } => {
+                assert!(*self.argument_data_type(&condition) == DataType::Bool);
+
+                let condition_compiled = self.compile_nasm_argument(&condition);
+
+                let rax = NasmRegister::Rax.register_text(&DataType::Bool);
+
+                format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    jnz .L{label_id}")
             },
             _ => todo!(),
         }
@@ -231,7 +253,7 @@ impl<'src> Function<'src> {
         let code = self
             .opcodes
             .iter()
-            .map(|opcode| self.compile_nasm_opcode(*opcode) + "\n")
+            .map(|opcode| self.compile_nasm_opcode(opcode) + "\n")
             .collect::<String>();
 
         format!(

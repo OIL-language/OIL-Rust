@@ -8,7 +8,9 @@ use std::{cmp::Eq, error::Error, fmt};
 
 pub enum TypeError<'src> {
     TypeMismatch(DataType, DataType),
+    ExpectedType(DataType, DataType),
     NotANumber,
+    NotSigned,
     NotAssignable,
     NotDefined(&'src str)
 }
@@ -18,10 +20,12 @@ impl Error for TypeError<'_> {}
 impl fmt::Debug for TypeError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::TypeMismatch(a, b) => write!(f, "Mismatched types: {a:?} and {b:?}"),
-            Self::NotANumber => write!(f, "This is not a number, so you can't do that with it :/"),
-            Self::NotAssignable => write!(f, "You cannot assign to this expression"),
-            Self::NotDefined(var_name) => write!(f, "Variable `{var_name}` was not defined")
+            Self::TypeMismatch(a, b) => write!(f, "mismatched types: `{a:?}` and `{b:?}`"),
+            Self::ExpectedType(a, b) => write!(f, "expected `{a:?}` but found `{b:?}`"),
+            Self::NotANumber => write!(f, "this is not a number, so you can't do that with it :/"),
+            Self::NotSigned => write!(f, "this is not a signed number, so you can't do that with it :/"),
+            Self::NotAssignable => write!(f, "you can't assign to this expression"),
+            Self::NotDefined(var_name) => write!(f, "variable `{var_name}` was not defined")
         }
     }
 }
@@ -41,8 +45,8 @@ pub enum InferredType {
 impl fmt::Debug for InferredType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Int => write!(f, "{{inferred integer}}"),
-            Self::Any => write!(f, "{{inferred any}}"),
+            Self::Int => write!(f, "{{integer}}"),
+            Self::Any => write!(f, "{{any}}"),
         }
     }
 }
@@ -68,6 +72,10 @@ impl IntType {
             Self::S32 | Self::U32 => 4,
             Self::S64 | Self::U64 => 8,
         }
+    }
+
+    pub fn signed(&self) -> bool {
+        matches!(self, Self::S8 | Self::S16 | Self::S32 | Self::S64)
     }
 }
 
@@ -144,9 +152,13 @@ impl<'src> Ast<'src> {
                 let node_data_type = node.data_type.clone();
 
                 if oper.kind == TokenKind::Sub {
-                    let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = node_data_type else {
-                        return Err(TypeError::NotANumber.into());
-                    };
+                    match node_data_type {
+                        DataType::Int(int_type) => if !int_type.signed() {
+                            return Err(TypeError::NotSigned.into());
+                        },
+                        DataType::Inferred(InferredType::Int) => {},
+                        _ => return Err(TypeError::NotANumber.into())
+                    }
                 }
 
                 node_data_type
@@ -231,29 +243,35 @@ impl<'src> Ast<'src> {
 
                 if_block.data_type.clone()
             }
-            _ => unreachable!(),
+            AstKind::WhileLoop { ref mut condition, ref mut body } => {
+                condition.infer(&DataType::Bool)?;
+
+                body.infer(&DataType::Void)?;
+
+                body.data_type.clone()
+            }
         };
 
         Ok(Self { assignable, kind, data_type })
     }
 
     pub fn infer(&mut self, data_type: &DataType) -> CompilerResult<'src, ()> {
-        let DataType::Inferred(inferred_type) = self.data_type else {
+        let DataType::Inferred(self_inferred_type) = self.data_type else {
             if let DataType::Inferred(_) = data_type {
                 return Ok(());
             }
 
             if data_type != &self.data_type {
-                return Err(TypeError::TypeMismatch(data_type.clone(), self.data_type.clone()).into());
+                return Err(TypeError::ExpectedType(data_type.clone(), self.data_type.clone()).into());
             }
 
             return Ok(());
         };
 
-        match &inferred_type {
+        match &self_inferred_type {
             InferredType::Int => {
                 let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = data_type else {
-                    return Err(TypeError::TypeMismatch(DataType::Inferred(inferred_type), data_type.clone()).into());
+                    return Err(TypeError::ExpectedType(data_type.clone(), DataType::Inferred(self_inferred_type)).into());
                 };
             }
             _ => {}
@@ -282,8 +300,6 @@ impl<'src> Ast<'src> {
                 if let Some(ref mut else_block) = else_block {
                     if_block.infer(data_type)?;
                     else_block.infer(data_type)?;
-                } else {
-                    if_block.infer(&DataType::Void)?;
                 }
             },
             _ => {}

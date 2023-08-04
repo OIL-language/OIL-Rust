@@ -38,19 +38,19 @@ impl<'src> Compiler<'src> {
         match &ast.kind {
             AstKind::Node { ref token } => {
                 let node = match token.kind {
-                    TokenKind::Number(value) => Argument::Constant { value },
+                    TokenKind::Number(value) => Argument::Constant { value, data_type: ast.data_type.clone() },
                     TokenKind::Ident => {
                         Argument::Register(
                             self.variable_registers[&self.symbol_table.get_variable_id(token.text).unwrap()]
                         )
                     },
-                    TokenKind::True => Argument::Constant { value: 1 },
-                    TokenKind::False => Argument::Constant { value: 0 },
+                    TokenKind::True => Argument::Constant { value: 1, data_type: DataType::Bool },
+                    TokenKind::False => Argument::Constant { value: 0, data_type: DataType::Bool },
                     _ => unreachable!(),
                 };
 
-                dst.map_or(node, |dst| {
-                    self.function.add_opcode(OpCode::Mov { dst, src: node });
+                dst.map_or(node.clone(), |dst| {
+                    self.function.add_opcode(OpCode::Mov { dst: dst.clone(), src: node });
                     dst
                 })
             },
@@ -63,30 +63,47 @@ impl<'src> Compiler<'src> {
                     Argument::Register(self.function.add_register(lhs.data_type.clone()))
                 });
 
-                let _lhs = self.compile_ast(lhs, Some(dst));
+                let _lhs = self.compile_ast(lhs, Some(dst.clone()));
 
                 let rhs = self.compile_ast(rhs, None);
 
                 match oper.kind {
-                    TokenKind::Add => self.function.add_opcode(OpCode::Add { dst, src: rhs }),
-                    TokenKind::Sub => self.function.add_opcode(OpCode::Sub { dst, src: rhs }),
-                    TokenKind::Mul => self.function.add_opcode(OpCode::Mul { dst, src: rhs }),
-                    TokenKind::Div => self.function.add_opcode(OpCode::Div { dst, src: rhs }),
-                    TokenKind::Mod => self.function.add_opcode(OpCode::Mod { dst, src: rhs }),
+                    TokenKind::Add => self.function.add_opcode(OpCode::Add { dst: dst.clone(), src: rhs }),
+                    TokenKind::Sub => self.function.add_opcode(OpCode::Sub { dst: dst.clone(), src: rhs }),
+                    TokenKind::Mul => self.function.add_opcode(OpCode::Mul { dst: dst.clone(), src: rhs }),
+                    TokenKind::Div => self.function.add_opcode(OpCode::Div { dst: dst.clone(), src: rhs }),
+                    TokenKind::Mod => self.function.add_opcode(OpCode::Mod { dst: dst.clone(), src: rhs }),
                     _ => unreachable!(),
                 }
 
                 dst
-            }
+            },
+            AstKind::Prefix {
+                ref oper,
+                ref node
+            } => {
+                let dst = dst.unwrap_or_else(|| {
+                    Argument::Register(self.function.add_register(node.data_type.clone()))
+                });
+
+                let _node = self.compile_ast(node, Some(dst.clone()));
+                
+                match oper.kind {
+                    TokenKind::Sub => self.function.add_opcode(OpCode::Negate { dst: dst.clone() }),
+                    _ => unreachable!()
+                }
+
+                dst
+            },
             AstKind::Assign {
                 ref lhs,
                 ref rhs,
             } => {
                 let lhs = self.compile_ast(lhs, None);
-                let _rhs = self.compile_ast(rhs, Some(lhs));
+                let _rhs = self.compile_ast(rhs, Some(lhs.clone()));
 
                 Argument::NullRegister
-            }
+            },
             AstKind::Block { scope_id, ref statements } => {
                 let dst = dst.unwrap_or_else(|| {
                     if let DataType::Void = ast.data_type {
@@ -100,7 +117,7 @@ impl<'src> Compiler<'src> {
 
                 for (n, statement) in statements.iter().enumerate() {
                     let _statement = if n + 1 == statements.len() && ast.data_type != DataType::Void {
-                        self.compile_ast(statement, Some(dst))
+                        self.compile_ast(statement, Some(dst.clone()))
                     } else {
                         self.compile_ast(statement, None)
                     };
@@ -109,7 +126,7 @@ impl<'src> Compiler<'src> {
                 self.symbol_table.leave_scope();
 
                 dst
-            }
+            },
             AstKind::Declaration { name, ref data_type, ref value } => {
                 let variable = self.function.add_register(data_type.clone());
 
@@ -120,7 +137,7 @@ impl<'src> Compiler<'src> {
                 }
 
                 Argument::NullRegister
-            }
+            },
             AstKind::IfStatement { condition, if_block, else_block } => {
                 let dst = dst.unwrap_or_else(|| {
                     if let DataType::Void = ast.data_type {
@@ -137,20 +154,36 @@ impl<'src> Compiler<'src> {
 
                 self.function.add_opcode(OpCode::GotoIfZero { condition, label_id: else_label });
 
-                let _if_block = self.compile_ast(if_block, Some(dst));
+                let _if_block = self.compile_ast(if_block, Some(dst.clone()));
 
                 self.function.add_opcode(OpCode::Goto { label_id: end_label });
                 self.function.add_opcode(OpCode::Label { label_id: else_label });
 
                 if let Some(ref else_block) = else_block {
-                    let _else_block = self.compile_ast(else_block, Some(dst));
+                    let _else_block = self.compile_ast(else_block, Some(dst.clone()));
                 }
 
                 self.function.add_opcode(OpCode::Label { label_id: end_label });
 
                 dst
-            }
-            _ => todo!(),
+            },
+            AstKind::WhileLoop { condition, body } => {
+                let start_label = self.function.add_label();
+                let end_label = self.function.add_label();
+
+                self.function.add_opcode(OpCode::Label { label_id: start_label });
+
+                let condition = self.compile_ast(condition, None);
+
+                self.function.add_opcode(OpCode::GotoIfZero { condition, label_id: end_label });
+
+                let _body = self.compile_ast(body, None);
+
+                self.function.add_opcode(OpCode::Goto { label_id: start_label });
+                self.function.add_opcode(OpCode::Label { label_id: end_label });
+
+                Argument::NullRegister
+            },
         }
     }
 }
