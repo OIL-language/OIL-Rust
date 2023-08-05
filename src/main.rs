@@ -15,7 +15,7 @@ fn compile(file: &str) -> CompilerResult<ByteCode<'_>> {
     let mut symbol_table = SymbolTable::new();
 
     let ast = Parser::new(file).parse(&mut symbol_table)?;
-
+    
     Ok(Compiler::compile(ast, symbol_table))
 }
 

@@ -18,7 +18,7 @@ impl<'src> Compiler<'src> {
         Self {
             symbol_table,
             variable_registers: HashMap::new(),
-            function: Function::new("main", DataType::Int(IntType::U8))
+            function: Function::new("main", DataType::Int(IntType::U64))
         }
     }
 
@@ -31,6 +31,8 @@ impl<'src> Compiler<'src> {
 
         bytecode.add_function(compiler.function);
 
+        println!("{bytecode:#?}");
+
         bytecode
     }
 
@@ -39,11 +41,9 @@ impl<'src> Compiler<'src> {
             AstKind::Node { ref token } => {
                 let node = match token.kind {
                     TokenKind::Number(value) => Argument::Constant { value, data_type: ast.data_type.clone() },
-                    TokenKind::Ident => {
-                        Argument::Register(
-                            self.variable_registers[&self.symbol_table.get_variable_id(token.text).unwrap()]
-                        )
-                    },
+                    TokenKind::Ident => Argument::Register(
+                        self.variable_registers[&self.symbol_table.get_variable_id(token.text).unwrap()]
+                    ),
                     TokenKind::True => Argument::Constant { value: 1, data_type: DataType::Bool },
                     TokenKind::False => Argument::Constant { value: 0, data_type: DataType::Bool },
                     _ => unreachable!(),
@@ -59,20 +59,57 @@ impl<'src> Compiler<'src> {
                 ref lhs,
                 ref rhs,
             } => {
-                let dst = dst.unwrap_or_else(|| {
-                    Argument::Register(self.function.add_register(lhs.data_type.clone()))
-                });
-
-                let _lhs = self.compile_ast(lhs, Some(dst.clone()));
-
-                let rhs = self.compile_ast(rhs, None);
+                let dst = dst.unwrap_or_else(|| Argument::Register(self.function.add_register(ast.data_type.clone())));
 
                 match oper.kind {
-                    TokenKind::Add => self.function.add_opcode(OpCode::Add { dst: dst.clone(), src: rhs }),
-                    TokenKind::Sub => self.function.add_opcode(OpCode::Sub { dst: dst.clone(), src: rhs }),
-                    TokenKind::Mul => self.function.add_opcode(OpCode::Mul { dst: dst.clone(), src: rhs }),
-                    TokenKind::Div => self.function.add_opcode(OpCode::Div { dst: dst.clone(), src: rhs }),
-                    TokenKind::Mod => self.function.add_opcode(OpCode::Mod { dst: dst.clone(), src: rhs }),
+                    TokenKind::Add => {
+                        let _lhs = self.compile_ast(lhs, Some(dst.clone()));
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::Add { dst: dst.clone(), src: rhs });
+                    },
+                    TokenKind::Sub => {
+                        let _lhs = self.compile_ast(lhs, Some(dst.clone()));
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::Sub { dst: dst.clone(), src: rhs });
+                    },
+                    TokenKind::Mul => {
+                        let _lhs = self.compile_ast(lhs, Some(dst.clone()));
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::Mul { dst: dst.clone(), src: rhs });
+                    },
+                    TokenKind::Div => {
+                        let _lhs = self.compile_ast(lhs, Some(dst.clone()));
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::Div { dst: dst.clone(), src: rhs });
+                    },
+                    TokenKind::Mod => {
+                        let _lhs = self.compile_ast(lhs, Some(dst.clone()));
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::Mod { dst: dst.clone(), src: rhs });
+                    },
+                    TokenKind::Equals => {
+                        let lhs = self.compile_ast(lhs, None);
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::SetIfEqual { dst: dst.clone(), lhs, rhs });
+                    },
+                    TokenKind::Greater => {
+                        let lhs = self.compile_ast(lhs, None);
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::SetIfGreater { dst: dst.clone(), lhs, rhs });
+                    },
+                    TokenKind::Less => {
+                        let lhs = self.compile_ast(lhs, None);
+                        let rhs = self.compile_ast(rhs, None);
+
+                        self.function.add_opcode(OpCode::SetIfLess { dst: dst.clone(), lhs, rhs });
+                    },
                     _ => unreachable!(),
                 }
 
@@ -82,9 +119,7 @@ impl<'src> Compiler<'src> {
                 ref oper,
                 ref node
             } => {
-                let dst = dst.unwrap_or_else(|| {
-                    Argument::Register(self.function.add_register(node.data_type.clone()))
-                });
+                let dst = dst.unwrap_or_else(|| Argument::Register(self.function.add_register(ast.data_type.clone())));
 
                 let _node = self.compile_ast(node, Some(dst.clone()));
                 

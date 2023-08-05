@@ -16,6 +16,9 @@ pub enum TokenKind<'src> {
     Mul,
     Div,
     Mod,
+    Equals,
+    Greater,
+    Less,
     LParen,
     RParen,
     LCurly,
@@ -24,7 +27,7 @@ pub enum TokenKind<'src> {
     RSquare,
     SemiColon,
     Colon,
-    Equals,
+    Assign,
     Let,
     If,
     Else,
@@ -43,8 +46,10 @@ impl<'src> TokenKind<'src> {
 
     fn infix_bp(&self) -> Option<(usize, usize)> {
         match self {
-            Self::Add | Self::Sub => Some((1, 2)),
-            Self::Mul | Self::Div | Self::Mod => Some((3, 4)),
+            | Self::Equals
+            | Self::Greater | Self::Less      => Some((1, 2)),
+            Self::Add | Self::Sub             => Some((3, 4)),
+            Self::Mul | Self::Div | Self::Mod => Some((5, 6)),
             _ => None,
         }
     }
@@ -71,6 +76,9 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::Mul => write!(f, "*"),
             TokenKind::Div => write!(f, "/"),
             TokenKind::Mod => write!(f, "%"),
+            TokenKind::Equals => write!(f, "=="),
+            TokenKind::Greater => write!(f, ">"),
+            TokenKind::Less => write!(f, "<"),
             TokenKind::LParen => write!(f, "("),
             TokenKind::RParen => write!(f, ")"),
             TokenKind::LCurly => write!(f, "{{"),
@@ -79,7 +87,7 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::RSquare => write!(f, "]"),
             TokenKind::SemiColon => write!(f, ";"),
             TokenKind::Colon => write!(f, ":"),
-            TokenKind::Equals => write!(f, "="),
+            TokenKind::Assign => write!(f, "="),
             TokenKind::Let => write!(f, "let"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
@@ -258,6 +266,18 @@ impl<'src> Parser<'src> {
                     '-' => TokenKind::Sub,
                     '*' => TokenKind::Mul,
                     '/' => TokenKind::Div,
+                    '%' => TokenKind::Mod,
+                    '=' => {
+                        if let Some(&(_, '=')) = self.chars.peek() {
+                            self.advance(&mut pos);
+
+                            TokenKind::Equals
+                        } else {
+                            TokenKind::Assign
+                        }
+                    },
+                    '>' => TokenKind::Greater,
+                    '<' => TokenKind::Less,
                     '(' => TokenKind::LParen,
                     ')' => TokenKind::RParen,
                     '{' => TokenKind::LCurly,
@@ -265,7 +285,6 @@ impl<'src> Parser<'src> {
                     '[' => TokenKind::LSquare,
                     ']' => TokenKind::RSquare,
                     ';' => TokenKind::SemiColon,
-                    '=' => TokenKind::Equals,
                     ':' => TokenKind::Colon,
                     other => return Err(ParseError::InvalidChar(other).into()),
                 },
@@ -293,35 +312,46 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
-        if let Some(Token { kind: TokenKind::Let, .. }) = self.peek_token()? {
+    fn parse_let_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+        self.expect(TokenKind::Let)?;
+
+        let name = self.expect(TokenKind::Ident)?;
+
+        let data_type = if let Some(Token { kind: TokenKind::Colon, .. }) = self.peek_token()? {
             self.read_token()?;
 
-            let name = self.expect(TokenKind::Ident)?;
+            self.parse_data_type()?
+        } else {
+            DataType::Inferred(InferredType::Any)
+        };
 
-            let data_type = if let Some(Token { kind: TokenKind::Colon, .. }) = self.peek_token()? {
-                self.read_token()?;
+        let value = if let Some(Token { kind: TokenKind::Assign, .. }) = self.peek_token()? {
+            self.read_token()?;
+            Some(Box::new(self.parse_expr_bp(symbol_table, 0)?))
+        } else {
+            None
+        };
 
-                self.parse_data_type()?
-            } else {
-                DataType::Inferred(InferredType::Any)
-            };
+        symbol_table.add_variable(name.text, Variable { data_type: data_type.clone() });
 
-            let value = if let Some(Token { kind: TokenKind::Equals, .. }) = self.peek_token()? {
-                self.read_token()?;
-                Some(Box::new(self.parse_expr_bp(symbol_table, 0)?))
-            } else {
-                None
-            };
+        Ast::new(
+            symbol_table,
+            AstKind::Declaration {
+                name: name.text,
+                data_type,
+                value
+            }
+        )
+    }
 
-            symbol_table.add_variable(name.text, Variable { data_type: data_type.clone() });
-
-            return Ast::new(symbol_table, AstKind::Declaration { name: name.text, data_type, value });
+    fn parse_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+        if let Some(Token { kind: TokenKind::Let, .. }) = self.peek_token()? {
+            return self.parse_let_statement(symbol_table);
         }
 
         let lhs = self.parse_expr_bp(symbol_table, 0)?;
 
-        let Some(Token { kind: TokenKind::Equals, .. }) = self.peek_token()? else {
+        let Some(Token { kind: TokenKind::Assign, .. }) = self.peek_token()? else {
             return Ok(lhs);
         };
 

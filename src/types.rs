@@ -176,19 +176,25 @@ impl<'src> Ast<'src> {
                 }
 
                 match oper.kind {
-                    | TokenKind::Add
-                    | TokenKind::Sub
-                    | TokenKind::Mul
-                    | TokenKind::Div
+                    | TokenKind::Add | TokenKind::Sub
+                    | TokenKind::Mul | TokenKind::Div
                     | TokenKind::Mod => {
                         let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = lhs.data_type else {
                             return Err(TypeError::NotANumber.into());
                         };
-                    },
-                    _ => {}
-                }
 
-                lhs.data_type.clone()
+                        lhs.data_type.clone()
+                    },
+                    | TokenKind::Equals | TokenKind::Greater
+                    | TokenKind::Less => {
+                        let (DataType::Int(_) | DataType::Inferred(InferredType::Int)) = lhs.data_type else {
+                            return Err(TypeError::NotANumber.into());
+                        };
+
+                        DataType::Bool
+                    },
+                    _ => unreachable!()
+                }
             }
             AstKind::Assign { ref mut lhs, ref mut rhs } => {
                 lhs.infer(&rhs.data_type)?;
