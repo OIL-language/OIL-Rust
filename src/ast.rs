@@ -1,4 +1,9 @@
-use crate::{parser::Token, types::DataType};
+use crate::{
+    parser::{Token, TokenKind},
+    symbol_table::SymbolTable,
+    types::DataType,
+    CompilerResult,
+};
 use std::cmp::Eq;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -17,7 +22,7 @@ pub enum AstKind<'src> {
     },
     Assign {
         lhs: Box<Ast<'src>>,
-        rhs: Box<Ast<'src>>
+        rhs: Box<Ast<'src>>,
     },
     Block {
         scope_id: usize,
@@ -27,6 +32,10 @@ pub enum AstKind<'src> {
         name: &'src str,
         data_type: DataType,
         value: Option<Box<Ast<'src>>>,
+    },
+    Call {
+        lhs: Box<Ast<'src>>,
+        arguments: Vec<Ast<'src>>,
     },
     IfStatement {
         condition: Box<Ast<'src>>,
@@ -39,9 +48,33 @@ pub enum AstKind<'src> {
     },
 }
 
+impl<'src> AstKind<'src> {
+    pub fn assignable(&self) -> bool {
+        matches!(
+            self,
+            Self::Node {
+                token: Token {
+                    kind: TokenKind::Ident,
+                    ..
+                }
+            }
+        )
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Ast<'src> {
-    pub assignable: bool,
     pub data_type: DataType,
     pub kind: AstKind<'src>,
+}
+
+impl<'src> Ast<'src> {
+    pub fn new(
+        symbol_table: &SymbolTable<'src>,
+        mut kind: AstKind<'src>,
+    ) -> CompilerResult<'src, Self> {
+        let data_type = DataType::new(symbol_table, &mut kind)?;
+
+        Ok(Self { kind, data_type })
+    }
 }

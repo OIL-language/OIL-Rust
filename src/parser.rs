@@ -1,7 +1,7 @@
 use crate::{
     ast::{Ast, AstKind},
-    types::{DataType, IntType, InferredType},
     symbol_table::{SymbolTable, Variable},
+    types::{DataType, IntType},
     CompilerResult,
 };
 use std::{borrow::Cow, cmp::Eq, error::Error, fmt, iter::Peekable, str::CharIndices};
@@ -27,6 +27,7 @@ pub enum TokenKind<'src> {
     RSquare,
     SemiColon,
     Colon,
+    Comma,
     Assign,
     Let,
     If,
@@ -40,22 +41,24 @@ impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
             Self::Sub => Some(5),
-            _ => None
+            _ => None,
         }
     }
 
     fn infix_bp(&self) -> Option<(usize, usize)> {
         match self {
-            | Self::Equals
-            | Self::Greater | Self::Less      => Some((1, 2)),
-            Self::Add | Self::Sub             => Some((3, 4)),
+            Self::Equals | Self::Greater | Self::Less => Some((1, 2)),
+            Self::Add | Self::Sub => Some((3, 4)),
             Self::Mul | Self::Div | Self::Mod => Some((5, 6)),
             _ => None,
         }
     }
 
     fn is_node(&self) -> bool {
-        matches!(self, Self::Ident | Self::Number(_) | Self::Str(_) | Self::True | Self::False)
+        matches!(
+            self,
+            Self::Ident | Self::Number(_) | Self::Str(_) | Self::True | Self::False
+        )
     }
 }
 
@@ -87,6 +90,7 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::RSquare => write!(f, "]"),
             TokenKind::SemiColon => write!(f, ";"),
             TokenKind::Colon => write!(f, ":"),
+            TokenKind::Comma => write!(f, ","),
             TokenKind::Assign => write!(f, "="),
             TokenKind::Let => write!(f, "let"),
             TokenKind::If => write!(f, "if"),
@@ -175,7 +179,7 @@ impl<'src> Parser<'src> {
     }
 
     #[inline]
-    fn peeking(&mut self, function: impl Fn(char) -> bool) -> bool {
+    fn peeking_char(&mut self, function: impl Fn(char) -> bool) -> bool {
         self.chars.peek().map_or(false, |&(_, ch)| function(ch))
     }
 
@@ -186,10 +190,10 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn read_token(&mut self) -> CompilerResult<'src, Option<Token<'src>>> {
+    fn next_token(&mut self) -> CompilerResult<'src, Option<Token<'src>>> {
         while let Some(&(mut pos @ start_pos, ch)) = self.chars.peek() {
             if ch.is_ascii_whitespace() {
-                while self.peeking(|ch| ch.is_ascii_whitespace()) {
+                while self.peeking_char(|ch| ch.is_ascii_whitespace()) {
                     self.advance(&mut pos);
                 }
 
@@ -197,7 +201,7 @@ impl<'src> Parser<'src> {
             }
 
             if ch.is_ascii_alphabetic() || ch == '_' {
-                while self.peeking(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                while self.peeking_char(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
                     self.advance(&mut pos);
                 }
 
@@ -218,7 +222,7 @@ impl<'src> Parser<'src> {
             }
 
             if ch.is_ascii_digit() {
-                while self.peeking(|ch| ch.is_ascii_digit()) {
+                while self.peeking_char(|ch| ch.is_ascii_digit()) {
                     self.advance(&mut pos);
                 }
 
@@ -226,15 +230,15 @@ impl<'src> Parser<'src> {
 
                 return Ok(Some(Token {
                     text,
-                    kind: TokenKind::Number(unsafe { text.parse().unwrap_unchecked() }), // We deliberately unwrap here
+                    kind: TokenKind::Number(text.parse()?),
                 }));
             }
 
             if ch == '"' {
                 self.advance(&mut pos);
 
-                while !self.peeking(|ch| ch == '"') {
-                    if self.peeking(|ch| ch == '\\') {
+                while !self.peeking_char(|ch| ch == '"') {
+                    if self.peeking_char(|ch| ch == '\\') {
                         self.advance(&mut pos);
                     }
 
@@ -268,14 +272,14 @@ impl<'src> Parser<'src> {
                     '/' => TokenKind::Div,
                     '%' => TokenKind::Mod,
                     '=' => {
-                        if let Some(&(_, '=')) = self.chars.peek() {
+                        if self.peeking_char(|ch| ch == '=') {
                             self.advance(&mut pos);
 
                             TokenKind::Equals
                         } else {
                             TokenKind::Assign
                         }
-                    },
+                    }
                     '>' => TokenKind::Greater,
                     '<' => TokenKind::Less,
                     '(' => TokenKind::LParen,
@@ -286,6 +290,7 @@ impl<'src> Parser<'src> {
                     ']' => TokenKind::RSquare,
                     ';' => TokenKind::SemiColon,
                     ':' => TokenKind::Colon,
+                    ',' => TokenKind::Comma,
                     other => return Err(ParseError::InvalidChar(other).into()),
                 },
             }));
@@ -294,127 +299,145 @@ impl<'src> Parser<'src> {
         Ok(None)
     }
 
+    #[inline(always)]
     fn peek_token(&mut self) -> CompilerResult<'src, Option<Token<'src>>> {
         let prev_self = self.clone(); // Fast, shallow copy
-        let token = self.read_token();
+        let token = self.next_token();
         *self = prev_self;
         token
     }
 
-    fn expect(&mut self, kind: TokenKind<'src>) -> CompilerResult<'src, Token<'src>> {
-        let token = self.read_token()?
+    #[inline(always)]
+    fn expect_token(&mut self, kind: TokenKind<'src>) -> CompilerResult<'src, Token<'src>> {
+        let token = self
+            .next_token()?
             .ok_or(ParseError::UnexpectedToken(None))?;
 
         if token.kind == kind {
             Ok(token)
         } else {
-            return Err(ParseError::UnexpectedToken(Some(token)).into());
+            Err(ParseError::UnexpectedToken(Some(token)).into())
         }
     }
 
-    fn parse_let_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
-        self.expect(TokenKind::Let)?;
+    #[inline(always)]
+    fn peeking_token(&mut self, kind: TokenKind<'src>) -> CompilerResult<'src, bool> {
+        Ok(self.peek_token()?.map_or(false, |token| token.kind == kind))
+    }
 
-        let name = self.expect(TokenKind::Ident)?;
+    fn parse_let_statement(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        self.expect_token(TokenKind::Let)?;
 
-        let data_type = if let Some(Token { kind: TokenKind::Colon, .. }) = self.peek_token()? {
-            self.read_token()?;
+        let name = self.expect_token(TokenKind::Ident)?;
 
-            self.parse_data_type()?
-        } else {
-            DataType::Inferred(InferredType::Any)
-        };
+        self.expect_token(TokenKind::Colon)?;
 
-        let value = if let Some(Token { kind: TokenKind::Assign, .. }) = self.peek_token()? {
-            self.read_token()?;
+        let data_type = self.parse_data_type()?;
+
+        let value = if self.peeking_token(TokenKind::Assign)? {
+            self.next_token()?;
             Some(Box::new(self.parse_expr_bp(symbol_table, 0)?))
         } else {
             None
         };
 
-        symbol_table.add_variable(name.text, Variable { data_type: data_type.clone() });
+        symbol_table.add_variable(
+            name.text,
+            Variable {
+                data_type: data_type.clone(),
+            },
+        );
 
         Ast::new(
             symbol_table,
             AstKind::Declaration {
                 name: name.text,
                 data_type,
-                value
-            }
+                value,
+            },
         )
     }
 
-    fn parse_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
-        if let Some(Token { kind: TokenKind::Let, .. }) = self.peek_token()? {
+    fn parse_statement(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        if self.peeking_token(TokenKind::Let)? {
             return self.parse_let_statement(symbol_table);
         }
 
         let lhs = self.parse_expr_bp(symbol_table, 0)?;
 
-        let Some(Token { kind: TokenKind::Assign, .. }) = self.peek_token()? else {
+        if !self.peeking_token(TokenKind::Assign)? {
             return Ok(lhs);
-        };
+        }
 
-        self.read_token()?;
+        self.next_token()?;
 
         let rhs = self.parse_expr_bp(symbol_table, 0)?;
 
-        Ast::new(symbol_table, AstKind::Assign { lhs: Box::new(lhs), rhs: Box::new(rhs) })
+        Ast::new(
+            symbol_table,
+            AstKind::Assign {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+        )
     }
 
-    fn parse_block(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+    fn parse_block(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
         let scope_id = symbol_table.add_scope();
 
         let mut statements: Vec<Ast<'src>> = Vec::new();
 
-        self.read_token()?;
+        self.next_token()?;
 
-        loop {
-            if let Some(Token { kind: TokenKind::RCurly, .. }) = self.peek_token()? {
-                break;
-            }
-
+        while !self.peeking_token(TokenKind::RCurly)? {
             let statement = self.parse_statement(symbol_table)?;
 
             statements.push(statement);
 
-            let Some(peek) = self.peek_token()? else {
-                return Err(ParseError::UnexpectedToken(None).into());
-            };
-
-            match peek.kind {
-                TokenKind::RCurly => break,
-                TokenKind::SemiColon => self.read_token()?,
-                _ => return Err(ParseError::UnexpectedToken(Some(peek)).into())
-            };
+            self.expect_token(TokenKind::SemiColon)?;
         }
 
-        self.read_token()?;
+        self.next_token()?;
 
         symbol_table.leave_scope();
 
-        Ast::new(symbol_table, AstKind::Block { statements, scope_id })
+        Ast::new(
+            symbol_table,
+            AstKind::Block {
+                statements,
+                scope_id,
+            },
+        )
     }
 
     fn parse_data_type(&mut self) -> CompilerResult<'src, DataType> {
-        let Some(token) = self.read_token()? else {
+        let Some(token) = self.next_token()? else {
             return Err(ParseError::UnexpectedToken(None).into());
         };
 
         let data_type = if token.kind == TokenKind::Ident {
             match token.text {
-                "Void"   => DataType::Void,
-                "Bool"   => DataType::Bool,
-                "S8"     => DataType::Int(IntType::S8),
-                "S16"    => DataType::Int(IntType::S16),
-                "S32"    => DataType::Int(IntType::S32),
-                "S64"    => DataType::Int(IntType::S64),
-                "U8"     => DataType::Int(IntType::U8),
-                "U16"    => DataType::Int(IntType::U16),
-                "U32"    => DataType::Int(IntType::U32),
-                "U64"    => DataType::Int(IntType::U64),
+                "Void" => DataType::Void,
+                "Bool" => DataType::Bool,
+                "S8" => DataType::Int(IntType::S8),
+                "S16" => DataType::Int(IntType::S16),
+                "S32" => DataType::Int(IntType::S32),
+                "S64" => DataType::Int(IntType::S64),
+                "U8" => DataType::Int(IntType::U8),
+                "U16" => DataType::Int(IntType::U16),
+                "U32" => DataType::Int(IntType::U32),
+                "U64" => DataType::Int(IntType::U64),
                 "String" => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
-                _        => return Err(ParseError::UnexpectedToken(Some(token)).into())
+                _ => return Err(ParseError::UnexpectedToken(Some(token)).into()),
             }
         } else {
             return Err(ParseError::UnexpectedToken(Some(token)).into());
@@ -423,15 +446,22 @@ impl<'src> Parser<'src> {
         Ok(data_type)
     }
 
-    fn parse_if_statement(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
-        self.expect(TokenKind::If)?;
+    fn parse_if_statement(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        self.expect_token(TokenKind::If)?;
 
         let condition = self.parse_expr_bp(symbol_table, 0)?;
 
         let if_block = self.parse_block(symbol_table)?;
 
-        let else_block = if let Some(Token { kind: TokenKind::Else, .. }) = self.peek_token()? {
-            self.read_token()?;
+        let else_block = if let Some(Token {
+            kind: TokenKind::Else,
+            ..
+        }) = self.peek_token()?
+        {
+            self.next_token()?;
 
             Some(Box::new(self.parse_block(symbol_table)?))
         } else {
@@ -443,13 +473,16 @@ impl<'src> Parser<'src> {
             AstKind::IfStatement {
                 condition: Box::new(condition),
                 if_block: Box::new(if_block),
-                else_block
-            }
+                else_block,
+            },
         )
     }
 
-    fn parse_while_loop(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
-        self.expect(TokenKind::While)?;
+    fn parse_while_loop(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        self.expect_token(TokenKind::While)?;
 
         let condition = self.parse_expr_bp(symbol_table, 0)?;
 
@@ -459,34 +492,67 @@ impl<'src> Parser<'src> {
             symbol_table,
             AstKind::WhileLoop {
                 condition: Box::new(condition),
-                body: Box::new(body)
-            }
+                body: Box::new(body),
+            },
         )
     }
 
-    fn parse_expr_bp(&mut self, symbol_table: &mut SymbolTable<'src>, min_bp: usize) -> CompilerResult<'src, Ast<'src>> {
-        let token = self.peek_token()?.ok_or(ParseError::UnexpectedToken(None))?;
+    fn parse_function_call_args(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Vec<Ast<'src>>> {
+        self.expect_token(TokenKind::LParen)?;
+
+        let mut arguments = Vec::new();
+
+        if self.peeking_token(TokenKind::RParen)? {
+            self.next_token()?;
+            return Ok(arguments)
+        }
+
+        loop {
+            arguments.push(self.parse_expr_bp(symbol_table, 0)?);
+
+            if !self.peeking_token(TokenKind::Comma)? {
+                self.expect_token(TokenKind::RParen)?;
+                break;
+            }
+
+            self.next_token()?;
+        }
+
+        Ok(arguments)
+    }
+
+    fn parse_expr_bp(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+        min_bp: usize,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        let token = self
+            .peek_token()?
+            .ok_or(ParseError::UnexpectedToken(None))?;
 
         let mut lhs = match &token.kind {
             TokenKind::LParen => {
-                self.read_token()?;
+                self.next_token()?;
 
                 let inside = self.parse_expr_bp(symbol_table, 0)?;
 
-                self.expect(TokenKind::RParen)?;
+                self.expect_token(TokenKind::RParen)?;
 
                 inside
-            },
+            }
             TokenKind::LCurly => self.parse_block(symbol_table)?,
             TokenKind::If => self.parse_if_statement(symbol_table)?,
             TokenKind::While => self.parse_while_loop(symbol_table)?,
             kind if kind.is_node() => {
-                self.read_token()?;
+                self.next_token()?;
 
                 Ast::new(symbol_table, AstKind::Node { token })?
-            },
+            }
             other => {
-                self.read_token()?;
+                self.next_token()?;
 
                 let Some(prefix_bp) = other.prefix_bp() else {
                     return Err(ParseError::UnexpectedToken(Some(token)).into());
@@ -499,15 +565,24 @@ impl<'src> Parser<'src> {
                     AstKind::Prefix {
                         oper: token,
                         node: Box::new(node),
-                    }
+                    },
                 )?
             }
         };
 
-        loop {
-            let Some(oper) = self.peek_token()? else {
-                break;
-            };
+        while let Some(oper) = self.peek_token()? {
+            if oper.kind == TokenKind::LParen {
+                let arguments = self.parse_function_call_args(symbol_table)?;
+
+                lhs = Ast::new(
+                    symbol_table,
+                    AstKind::Call {
+                        lhs: Box::new(lhs),
+                        arguments,
+                    },
+                )?;
+                continue;
+            }
 
             let Some((infix_left_bp, infix_right_bp)) = oper.kind.infix_bp() else {
                 break;
@@ -517,7 +592,7 @@ impl<'src> Parser<'src> {
                 break;
             };
 
-            self.read_token()?;
+            self.next_token()?;
 
             let rhs = self.parse_expr_bp(symbol_table, infix_right_bp)?;
 
@@ -527,17 +602,20 @@ impl<'src> Parser<'src> {
                     oper,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
-                }
+                },
             )?;
         }
 
         Ok(lhs)
     }
 
-    pub fn parse(&mut self, symbol_table: &mut SymbolTable<'src>) -> CompilerResult<'src, Ast<'src>> {
+    pub fn parse(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
         let expression = self.parse_expr_bp(symbol_table, 0)?;
 
-        if let Some(token) = self.read_token()? {
+        if let Some(token) = self.next_token()? {
             return Err(ParseError::UnexpectedToken(Some(token)).into());
         };
 

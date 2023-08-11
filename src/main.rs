@@ -1,8 +1,8 @@
 use oil::{
-    bytecode::ByteCode,
-    compiler::Compiler,
+    compiler,
     parser::Parser,
     symbol_table::SymbolTable,
+    types::{DataType, IntType},
     CompilerResult,
 };
 use std::{
@@ -11,12 +11,14 @@ use std::{
     io::Write,
 };
 
-fn compile(file: &str) -> CompilerResult<ByteCode<'_>> {
+fn compile<'src>(input_file: &'src str) -> CompilerResult<'src, String> {
     let mut symbol_table = SymbolTable::new();
 
-    let ast = Parser::new(file).parse(&mut symbol_table)?;
-    
-    Ok(Compiler::compile(ast, symbol_table))
+    let mut ast = Parser::new(input_file).parse(&mut symbol_table)?;
+
+    DataType::Int(IntType::U64).infer(&mut ast)?;
+
+    Ok(compiler::compile(ast, symbol_table))
 }
 
 fn main() -> CompilerResult<'static, ()> {
@@ -28,12 +30,8 @@ fn main() -> CompilerResult<'static, ()> {
         return Err("Not enough arguments provided.".into());
     };
 
-    let input_file = fs::read_to_string(input_file_path)?;
-
-    match compile(&input_file) {
-        Ok(bytecode) => {
-            let code = bytecode.compile_nasm();
-
+    match compile(&fs::read_to_string(input_file_path)?) {
+        Ok(code) => {
             if let Some(output_file_path) = args.next() {
                 let mut output_file = File::create(output_file_path)?;
 
