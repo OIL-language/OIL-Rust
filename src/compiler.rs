@@ -157,6 +157,16 @@ impl<'src> Compiler<'src> {
                             rhs,
                         });
                     }
+                    TokenKind::NotEquals => {
+                        let lhs = self.compile_ast(lhs, function, None);
+                        let rhs = self.compile_ast(rhs, function, None);
+
+                        function.add_opcode(OpCode::SetIfNotEqual {
+                            dst: dst.clone(),
+                            lhs,
+                            rhs,
+                        });
+                    }
                     TokenKind::Greater => {
                         let lhs = self.compile_ast(lhs, function, None);
                         let rhs = self.compile_ast(rhs, function, None);
@@ -211,6 +221,7 @@ impl<'src> Compiler<'src> {
 
                 match oper.kind {
                     TokenKind::Sub => function.add_opcode(OpCode::Negate { dst: dst.clone() }),
+                    TokenKind::Not => function.add_opcode(OpCode::Not { dst: dst.clone() }),
                     _ => unreachable!(),
                 }
 

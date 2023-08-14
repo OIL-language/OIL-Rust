@@ -1,7 +1,7 @@
 {
     fn main(): U64 {
         let i: U64 = 0;
-        while i <= 13 {
+        while !(i == 3) {
             print("Hello, World!", i);
             print("\n", 1);
             i = i + 1;

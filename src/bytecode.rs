@@ -102,7 +102,15 @@ pub enum OpCode {
         dst: Argument,
         src: Argument,
     },
+    Not {
+        dst: Argument,
+    },
     SetIfEqual {
+        dst: Argument,
+        lhs: Argument,
+        rhs: Argument,
+    },
+    SetIfNotEqual {
         dst: Argument,
         lhs: Argument,
         rhs: Argument,
@@ -309,6 +317,11 @@ impl<'src> Function<'src> {
 
                 format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rdx}\n")
             }
+            OpCode::Not { dst } => {
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+
+                format!("    and {dst_compiled}, 0x1\n    xor {dst_compiled}, 0x1\n")
+            }
             OpCode::SetIfEqual { dst, lhs, rhs } => {
                 assert_eq!(*self.argument_data_type(dst), DataType::Bool);
 
@@ -319,6 +332,17 @@ impl<'src> Function<'src> {
                 let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    sete {dst_compiled}\n")
+            }
+            OpCode::SetIfNotEqual { dst, lhs, rhs } => {
+                assert_eq!(*self.argument_data_type(dst), DataType::Bool);
+
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(lhs));
+
+                let lhs_compiled = self.compile_nasm_argument(lhs);
+                let rhs_compiled = self.compile_nasm_argument(rhs);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+
+                format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setne {dst_compiled}\n")
             }
             OpCode::SetIfGreater { dst, lhs, rhs } => {
                 assert_eq!(*self.argument_data_type(dst), DataType::Bool);

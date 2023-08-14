@@ -17,6 +17,8 @@ pub enum TokenKind<'src> {
     Div,
     Mod,
     Equals,
+    Not,
+    NotEquals,
     Greater,
     Less,
     GreaterOrEqual,
@@ -43,14 +45,16 @@ pub enum TokenKind<'src> {
 impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
-            Self::Sub => Some(5),
+            Self::Sub => Some(7),
+            Self::Not => Some(1),
             _ => None,
         }
     }
 
     fn infix_bp(&self) -> Option<(usize, usize)> {
         match self {
-            | Self::Equals | Self::Greater | Self::Less
+            | Self::Equals | Self::NotEquals
+            | Self::Greater | Self::Less
             | Self::GreaterOrEqual | Self::LessOrEqual => Some((1, 2)),
             Self::Add | Self::Sub => Some((3, 4)),
             Self::Mul | Self::Div | Self::Mod => Some((5, 6)),
@@ -84,6 +88,8 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::Div => write!(f, "/"),
             TokenKind::Mod => write!(f, "%"),
             TokenKind::Equals => write!(f, "=="),
+            TokenKind::Not => write!(f, "!"),
+            TokenKind::NotEquals => write!(f, "!="),
             TokenKind::Greater => write!(f, ">"),
             TokenKind::Less => write!(f, "<"),
             TokenKind::GreaterOrEqual => write!(f, ">="),
@@ -299,6 +305,14 @@ impl<'src> Parser<'src> {
                             TokenKind::Equals
                         } else {
                             TokenKind::Assign
+                        }
+                    }
+                    '!' => {
+                        if self.peeking_char(|ch| ch == '=') {
+                            self.advance(&mut pos);
+                            TokenKind::NotEquals
+                        } else {
+                            TokenKind::Not
                         }
                     }
                     '>' => {

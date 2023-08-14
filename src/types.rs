@@ -140,8 +140,8 @@ impl DataType {
             } => {
                 let node_data_type = node.data_type.clone();
 
-                if oper.kind == TokenKind::Sub {
-                    match node_data_type {
+                match oper.kind {
+                    TokenKind::Sub => match node_data_type {
                         DataType::Int(int_type) => {
                             if !int_type.is_signed() {
                                 return Err(TypeError::NotSigned.into());
@@ -149,7 +149,16 @@ impl DataType {
                         }
                         DataType::Inferred(InferredType::Int) => {}
                         _ => return Err(TypeError::NotANumber.into()),
-                    }
+                    },
+                    TokenKind::Not => {
+                        if node_data_type != DataType::Bool {
+                            return Err(TypeError::ExpectedType {
+                                expected: DataType::Bool,
+                                found: node_data_type
+                            }.into());
+                        }
+                    },
+                    _ => unreachable!()
                 }
 
                 node_data_type
@@ -173,18 +182,16 @@ impl DataType {
                 }
 
                 match oper.kind {
-                    TokenKind::Add
-                    | TokenKind::Sub
-                    | TokenKind::Mul
-                    | TokenKind::Div
-                    | TokenKind::Mod => {
+                    | TokenKind::Add | TokenKind::Sub
+                    | TokenKind::Mul | TokenKind::Div | TokenKind::Mod => {
                         if !lhs.data_type.is_integer() {
                             return Err(TypeError::NotANumber.into());
                         }
 
                         lhs.data_type.clone()
                     }
-                    | TokenKind::Equals | TokenKind::Greater | TokenKind::Less
+                    | TokenKind::Equals | TokenKind::NotEquals
+                    | TokenKind::Greater | TokenKind::Less
                     | TokenKind::GreaterOrEqual | TokenKind::LessOrEqual => {
                         if !lhs.data_type.is_integer() {
                             return Err(TypeError::NotANumber.into());
