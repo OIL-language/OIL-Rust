@@ -419,8 +419,21 @@ impl<'src> Parser<'src> {
         let name = self.expect_token(TokenKind::Ident)?;
 
         self.expect_token(TokenKind::LParen)?;
-        let arguments = Vec::<Ast<'src>>::new();
-        // TODO: add arguments
+
+        let mut arguments = Vec::new();
+
+        if !self.peeking_token(TokenKind::RParen)? {
+            loop {
+                arguments.push(self.parse_let_statement(symbol_table)?);
+
+                if !self.peeking_token(TokenKind::Comma)? {
+                    break;
+                }
+
+                self.next_token()?;
+            }
+        }
+
         self.expect_token(TokenKind::RParen)?;
 
         self.expect_token(TokenKind::Colon)?;
@@ -558,11 +571,7 @@ impl<'src> Parser<'src> {
 
         let if_block = self.parse_block(symbol_table)?;
 
-        let else_block = if let Some(Token {
-            kind: TokenKind::Else,
-            ..
-        }) = self.peek_token()?
-        {
+        let else_block = if self.peeking_token(TokenKind::Else)? {
             self.next_token()?;
 
             Some(Box::new(self.parse_block(symbol_table)?))
