@@ -117,6 +117,16 @@ pub enum OpCode {
         lhs: Argument,
         rhs: Argument,
     },
+    SetIfGreaterOrEqual {
+        dst: Argument,
+        lhs: Argument,
+        rhs: Argument,
+    },
+    SetIfLessOrEqual {
+        dst: Argument,
+        lhs: Argument,
+        rhs: Argument,
+    },
     Negate {
         dst: Argument,
     },
@@ -204,7 +214,7 @@ impl<'src> Function<'src> {
         self.opcodes.push(opcode);
     }
 
-    fn compile_nasm_argument(&self, argument: &Argument) -> String {
+    fn compile_nasm_argument_explicit(&self, argument: &Argument) -> String {
         match argument {
             Argument::Constant { value, .. } => value.to_string(),
             Argument::Register(register) => {
@@ -220,17 +230,26 @@ impl<'src> Function<'src> {
         }
     }
 
-    fn compile_nasm_opcode(&self, opcode: &OpCode) -> String {
-        match opcode {
+    fn compile_nasm_argument(&self, argument: &Argument) -> String {
+        match argument {
+            Argument::Constant { value, .. } => value.to_string(),
+            Argument::Register(register) => format!("[rsp + {}]", &self.registers[*register].stack_pos),
+            Argument::Symbol { name, .. } => name.clone(),
+            Argument::VoidRegister => unreachable!(),
+        }
+    }
+
+    fn compile_nasm_opcode(&self, opcode: &OpCode) -> Option<String> {
+        let data = match opcode {
             OpCode::Mov { dst, src } => {
                 if src == dst {
-                    return String::new();
+                    return None;
                 }
 
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 if let Argument::Register(_) = src {
                     format!("    mov {rax}, {src_compiled}\n    mov {dst_compiled}, {rax}\n")
@@ -242,7 +261,7 @@ impl<'src> Function<'src> {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 if let Argument::Register(_) = src {
                     format!("    mov {rax}, {src_compiled}\n    add {dst_compiled}, {rax}\n")
@@ -254,7 +273,7 @@ impl<'src> Function<'src> {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 if let Argument::Register(_) = src {
                     format!("    mov {rax}, {src_compiled}\n    sub {dst_compiled}, {rax}\n")
@@ -297,7 +316,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    sete {dst_compiled}\n")
             }
@@ -308,7 +327,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setg {dst_compiled}\n")
             }
@@ -319,9 +338,31 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument(dst);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setl {dst_compiled}\n")
+            }
+            OpCode::SetIfGreaterOrEqual { dst, lhs, rhs } => {
+                assert_eq!(*self.argument_data_type(dst), DataType::Bool);
+
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(lhs));
+
+                let lhs_compiled = self.compile_nasm_argument(lhs);
+                let rhs_compiled = self.compile_nasm_argument(rhs);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+
+                format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setge {dst_compiled}\n")
+            }
+            OpCode::SetIfLessOrEqual { dst, lhs, rhs } => {
+                assert_eq!(*self.argument_data_type(dst), DataType::Bool);
+
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(lhs));
+
+                let lhs_compiled = self.compile_nasm_argument(lhs);
+                let rhs_compiled = self.compile_nasm_argument(rhs);
+                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+
+                format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setle {dst_compiled}\n")
             }
             OpCode::Negate { dst } => {
                 let dst_compiled = self.compile_nasm_argument(dst);
@@ -355,12 +396,12 @@ impl<'src> Function<'src> {
                 format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    jnz .L{label_id}\n")
             }
             OpCode::Call { dst, lhs, arguments } => {
-                let lhs_compiled = self.compile_nasm_argument(lhs);
+                let lhs_compiled = self.compile_nasm_argument_explicit(lhs);
 
                 let push_arguments_code = arguments
                     .iter()
                     .rev()
-                    .map(|argument| format!("    push {}\n", self.compile_nasm_argument(argument)))
+                    .map(|argument| format!("    push {}\n", self.compile_nasm_argument_explicit(argument)))
                     .collect::<String>();
 
                 let argument_stack_size = arguments
@@ -379,18 +420,20 @@ impl<'src> Function<'src> {
                 if let Argument::VoidRegister = dst {
                     format!("{push_arguments_code}{call_code}    add rsp, {argument_stack_size}\n")
                 } else {
-                    let dst_compiled = self.compile_nasm_argument(dst);
+                    let dst_compiled = self.compile_nasm_argument_explicit(dst);
 
                     format!("{push_arguments_code}    push {dst_compiled}\n{call_code}    pop {dst_compiled}\n    add rsp, {argument_stack_size}\n")
                 }
             }
-        }
+        };
+
+        Some(data)
     }
 
     pub fn compile_nasm(&self) -> String {
         let code = self.opcodes
             .iter()
-            .map(|opcode| self.compile_nasm_opcode(opcode))
+            .filter_map(|opcode| self.compile_nasm_opcode(opcode))
             .collect::<String>();
 
         let rax = NasmRegister::Rax.register_text(&self.get_register(self.return_value).data_type);
@@ -405,7 +448,7 @@ impl<'src> Function<'src> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ByteCode<'src> {
     symbols: Vec<(String, &'src [u8])>,
     functions: Vec<Function<'src>>,
@@ -456,7 +499,7 @@ _start:
             self.symbols.iter()
                 .map(|(name, data)| {
                     format!(
-                        "{name}: db {}",
+                        "{name}: db {}\n",
                         data.iter()
                             .map(|byte| byte.to_string())
                             .collect::<Vec<String>>()
@@ -465,14 +508,5 @@ _start:
                 })
                 .collect::<String>()
         )
-    }
-}
-
-impl Default for ByteCode<'_> {
-    fn default() -> Self {
-        Self {
-            symbols: Vec::new(),
-            functions: Vec::new(),
-        }
     }
 }

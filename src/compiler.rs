@@ -10,22 +10,6 @@ use std::{
     borrow::Cow
 };
 
-pub fn compile<'src>(ast: Ast<'src>, symbol_table: SymbolTable<'src>) -> String {
-    let mut compiler = Compiler::new(symbol_table);
-
-    let mut main = Function::new("main", ast.data_type.clone());
-
-    let return_value = Argument::Register(main.return_value);
-
-    compiler.compile_ast(&ast, &mut main, Some(return_value));
-
-    compiler.bytecode.add_function(main);
-
-    println!("{:#?}", compiler.bytecode);
-
-    compiler.bytecode.compile_nasm()
-}
-
 pub struct Compiler<'src> {
     symbol_table: SymbolTable<'src>,
     bytecode: ByteCode<'src>,
@@ -33,12 +17,22 @@ pub struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    pub fn new(symbol_table: SymbolTable<'src>) -> Self {
-        Self {
+    pub fn compile(ast: Ast<'src>, symbol_table: SymbolTable<'src>) -> String {
+        let mut compiler = Self {
             symbol_table,
             bytecode: ByteCode::new(),
             variable_registers: HashMap::new()
-        }
+        };
+
+        let mut main = Function::new("@main", ast.data_type.clone());
+
+        let dst = Argument::Register(main.return_value);
+
+        compiler.compile_ast(&ast, &mut main, Some(dst));
+
+        compiler.bytecode.add_function(main);
+
+        compiler.bytecode.compile_nasm()
     }
 
     fn compile_ast(&mut self, ast: &'src Ast<'src>, function: &mut Function<'src>, dst: Option<Argument>) -> Argument {
@@ -183,6 +177,26 @@ impl<'src> Compiler<'src> {
                             rhs,
                         });
                     }
+                    TokenKind::GreaterOrEqual => {
+                        let lhs = self.compile_ast(lhs, function, None);
+                        let rhs = self.compile_ast(rhs, function, None);
+
+                        function.add_opcode(OpCode::SetIfGreaterOrEqual {
+                            dst: dst.clone(),
+                            lhs,
+                            rhs,
+                        });
+                    }
+                    TokenKind::LessOrEqual => {
+                        let lhs = self.compile_ast(lhs, function, None);
+                        let rhs = self.compile_ast(rhs, function, None);
+
+                        function.add_opcode(OpCode::SetIfLessOrEqual {
+                            dst: dst.clone(),
+                            lhs,
+                            rhs,
+                        });
+                    }
                     _ => unreachable!(),
                 }
 
@@ -242,12 +256,32 @@ impl<'src> Compiler<'src> {
             } => {
                 let variable = function.add_register(data_type.clone());
 
-                self.variable_registers
-                    .insert(self.symbol_table.get_variable_id(name).unwrap(), variable);
+                self.variable_registers.insert(
+                    self.symbol_table
+                        .get_variable_id(name)
+                        .expect("Unreachable: this variable should have been defined in the parsing stage"),
+                    variable
+                );
 
                 if let Some(value) = value {
                     self.compile_ast(value, function, Some(Argument::Register(variable)));
                 }
+
+                Argument::VoidRegister
+            }
+            AstKind::FunctionDeclaration {
+                name,
+                ref return_type,
+                ref body,
+                ..
+            } => {
+                let mut function = Function::new(name, return_type.clone());
+
+                let dst = Argument::Register(function.return_value); 
+
+                self.compile_ast(body, &mut function, Some(dst));
+
+                self.bytecode.add_function(function);
 
                 Argument::VoidRegister
             }

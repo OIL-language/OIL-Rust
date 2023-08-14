@@ -1,4 +1,13 @@
 {
-    print("Hello, World!\n", 14);
-    0;
+    fn main(): U64 {
+        let i: U64 = 0;
+        while i <= 13 {
+            print("Hello, World!", i);
+            print("\n", 1);
+            i = i + 1;
+        };
+        0;
+    };
+
+    main();
 }

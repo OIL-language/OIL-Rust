@@ -33,6 +33,12 @@ pub enum AstKind<'src> {
         data_type: DataType,
         value: Option<Box<Ast<'src>>>,
     },
+    FunctionDeclaration {
+        name: &'src str,
+        return_type: DataType,
+        arguments: Vec<Ast<'src>>,
+        body: Box<Ast<'src>>,
+    },
     Call {
         lhs: Box<Ast<'src>>,
         arguments: Vec<Ast<'src>>,
@@ -70,7 +76,7 @@ pub struct Ast<'src> {
 
 impl<'src> Ast<'src> {
     pub fn new(
-        symbol_table: &SymbolTable<'src>,
+        symbol_table: &mut SymbolTable<'src>,
         mut kind: AstKind<'src>,
     ) -> CompilerResult<'src, Self> {
         let data_type = DataType::new(symbol_table, &mut kind)?;

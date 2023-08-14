@@ -19,6 +19,8 @@ pub enum TokenKind<'src> {
     Equals,
     Greater,
     Less,
+    GreaterOrEqual,
+    LessOrEqual,
     LParen,
     RParen,
     LCurly,
@@ -29,6 +31,7 @@ pub enum TokenKind<'src> {
     Colon,
     Comma,
     Assign,
+    Function,
     Let,
     If,
     Else,
@@ -47,7 +50,8 @@ impl<'src> TokenKind<'src> {
 
     fn infix_bp(&self) -> Option<(usize, usize)> {
         match self {
-            Self::Equals | Self::Greater | Self::Less => Some((1, 2)),
+            | Self::Equals | Self::Greater | Self::Less
+            | Self::GreaterOrEqual | Self::LessOrEqual => Some((1, 2)),
             Self::Add | Self::Sub => Some((3, 4)),
             Self::Mul | Self::Div | Self::Mod => Some((5, 6)),
             _ => None,
@@ -82,6 +86,8 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::Equals => write!(f, "=="),
             TokenKind::Greater => write!(f, ">"),
             TokenKind::Less => write!(f, "<"),
+            TokenKind::GreaterOrEqual => write!(f, ">="),
+            TokenKind::LessOrEqual => write!(f, "<="),
             TokenKind::LParen => write!(f, "("),
             TokenKind::RParen => write!(f, ")"),
             TokenKind::LCurly => write!(f, "{{"),
@@ -92,6 +98,7 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Comma => write!(f, ","),
             TokenKind::Assign => write!(f, "="),
+            TokenKind::Function => write!(f, "fn"),
             TokenKind::Let => write!(f, "let"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
@@ -171,11 +178,25 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
-    pub fn new(string: &'src str) -> Self {
-        Self {
+    pub fn parse(
+        string: &'src str
+    ) -> CompilerResult<'src, (Ast<'src>, SymbolTable<'src>)> {
+        let mut symbol_table = SymbolTable::new();
+
+        let mut parser = Self {
             string,
             chars: string.char_indices().peekable(),
+        };
+
+        let mut ast = parser.parse_expr_bp(&mut symbol_table, 0)?;
+
+        if let Some(token) = parser.next_token()? {
+            return Err(ParseError::UnexpectedToken(Some(token)).into());
         }
+
+        DataType::Int(IntType::U64).infer(&mut ast)?;
+
+        Ok((ast, symbol_table))
     }
 
     #[inline]
@@ -210,6 +231,7 @@ impl<'src> Parser<'src> {
                 return Ok(Some(Token {
                     text,
                     kind: match text {
+                        "fn" => TokenKind::Function,
                         "let" => TokenKind::Let,
                         "if" => TokenKind::If,
                         "else" => TokenKind::Else,
@@ -274,14 +296,27 @@ impl<'src> Parser<'src> {
                     '=' => {
                         if self.peeking_char(|ch| ch == '=') {
                             self.advance(&mut pos);
-
                             TokenKind::Equals
                         } else {
                             TokenKind::Assign
                         }
                     }
-                    '>' => TokenKind::Greater,
-                    '<' => TokenKind::Less,
+                    '>' => {
+                        if self.peeking_char(|ch| ch == '=') {
+                            self.advance(&mut pos);
+                            TokenKind::GreaterOrEqual
+                        } else {
+                            TokenKind::Greater
+                        }
+                    },
+                    '<' => {
+                        if self.peeking_char(|ch| ch == '=') {
+                            self.advance(&mut pos);
+                            TokenKind::LessOrEqual
+                        } else {
+                            TokenKind::Less
+                        }
+                    },
                     '(' => TokenKind::LParen,
                     ')' => TokenKind::RParen,
                     '{' => TokenKind::LCurly,
@@ -348,7 +383,7 @@ impl<'src> Parser<'src> {
             name.text,
             Variable {
                 data_type: data_type.clone(),
-            },
+            }
         );
 
         Ast::new(
@@ -361,12 +396,65 @@ impl<'src> Parser<'src> {
         )
     }
 
+    fn parse_function_definition(
+        &mut self,
+        symbol_table: &mut SymbolTable<'src>,
+    ) -> CompilerResult<'src, Ast<'src>> {
+        self.expect_token(TokenKind::Function)?;
+
+        let name = self.expect_token(TokenKind::Ident)?;
+
+        self.expect_token(TokenKind::LParen)?;
+        let arguments = Vec::<Ast<'src>>::new();
+        // TODO: add arguments
+        self.expect_token(TokenKind::RParen)?;
+
+        self.expect_token(TokenKind::Colon)?;
+
+        let return_type = self.parse_data_type()?;
+
+        symbol_table.add_variable(
+            name.text,
+            Variable {
+                data_type: DataType::Function {
+                    return_type: Box::new(return_type.clone()),
+                    argument_types: arguments
+                        .iter()
+                        .map(|argument| {
+                            let AstKind::Declaration { ref data_type, .. } = &argument.kind else {
+                                unreachable!("There should only be declarations in function argument position")
+                            };
+
+                            data_type.clone()
+                        })
+                        .collect()
+                }
+            }
+        );
+
+        let body = self.parse_block(symbol_table)?;
+
+        Ast::new(
+            symbol_table,
+            AstKind::FunctionDeclaration {
+                name: name.text,
+                return_type,
+                arguments,
+                body: Box::new(body)
+            }
+        )
+    }
+
     fn parse_statement(
         &mut self,
         symbol_table: &mut SymbolTable<'src>,
     ) -> CompilerResult<'src, Ast<'src>> {
         if self.peeking_token(TokenKind::Let)? {
             return self.parse_let_statement(symbol_table);
+        }
+
+        if self.peeking_token(TokenKind::Function)? {
+            return self.parse_function_definition(symbol_table);
         }
 
         let lhs = self.parse_expr_bp(symbol_table, 0)?;
@@ -607,18 +695,5 @@ impl<'src> Parser<'src> {
         }
 
         Ok(lhs)
-    }
-
-    pub fn parse(
-        &mut self,
-        symbol_table: &mut SymbolTable<'src>,
-    ) -> CompilerResult<'src, Ast<'src>> {
-        let expression = self.parse_expr_bp(symbol_table, 0)?;
-
-        if let Some(token) = self.next_token()? {
-            return Err(ParseError::UnexpectedToken(Some(token)).into());
-        };
-
-        Ok(expression)
     }
 }

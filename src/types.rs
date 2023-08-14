@@ -119,7 +119,7 @@ pub enum DataType {
 
 impl DataType {
     pub fn new<'src>(
-        symbol_table: &SymbolTable<'src>,
+        symbol_table: &mut SymbolTable<'src>,
         kind: &mut AstKind<'src>,
     ) -> CompilerResult<'src, Self> {
         let data_type = match kind {
@@ -184,7 +184,8 @@ impl DataType {
 
                         lhs.data_type.clone()
                     }
-                    TokenKind::Equals | TokenKind::Greater | TokenKind::Less => {
+                    | TokenKind::Equals | TokenKind::Greater | TokenKind::Less
+                    | TokenKind::GreaterOrEqual | TokenKind::LessOrEqual => {
                         if !lhs.data_type.is_integer() {
                             return Err(TypeError::NotANumber.into());
                         };
@@ -240,6 +241,15 @@ impl DataType {
                 if let Some(ref mut value) = value {
                     data_type.infer(value)?;
                 }
+
+                DataType::Void
+            }
+            AstKind::FunctionDeclaration {
+                ref return_type,
+                ref mut body,
+                ..
+            } => {
+                return_type.infer(body)?;
 
                 DataType::Void
             }
