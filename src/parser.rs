@@ -1,5 +1,6 @@
 use crate::{
     ast::{Ast, AstKind},
+    bytecode::RegisterID,
     symbol_table::{SymbolTable, Variable},
     types::{DataType, IntType},
     CompilerResult,
@@ -29,6 +30,8 @@ pub enum TokenKind<'src> {
     RCurly,
     LSquare,
     RSquare,
+    Hash,
+    AtSymbol,
     SemiColon,
     Colon,
     Comma,
@@ -45,17 +48,19 @@ pub enum TokenKind<'src> {
 impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
-            Self::Sub => Some(7),
-            Self::Not => Some(1),
+            Self::Not | Self::Hash | Self::AtSymbol | Self::Sub => Some(7),
             _ => None,
         }
     }
 
     fn infix_bp(&self) -> Option<(usize, usize)> {
         match self {
-            | Self::Equals | Self::NotEquals
-            | Self::Greater | Self::Less
-            | Self::GreaterOrEqual | Self::LessOrEqual => Some((1, 2)),
+            Self::Equals
+            | Self::NotEquals
+            | Self::Greater
+            | Self::Less
+            | Self::GreaterOrEqual
+            | Self::LessOrEqual => Some((1, 2)),
             Self::Add | Self::Sub => Some((3, 4)),
             Self::Mul | Self::Div | Self::Mod => Some((5, 6)),
             _ => None,
@@ -100,6 +105,8 @@ impl<'src> fmt::Debug for Token<'src> {
             TokenKind::RCurly => write!(f, "}}"),
             TokenKind::LSquare => write!(f, "["),
             TokenKind::RSquare => write!(f, "]"),
+            TokenKind::Hash => write!(f, "#"),
+            TokenKind::AtSymbol => write!(f, "@"),
             TokenKind::SemiColon => write!(f, ";"),
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Comma => write!(f, ","),
@@ -157,7 +164,7 @@ fn parse_string(string: &'_ str) -> Cow<'_, str> {
         }
 
         let mut string = value.into_owned();
-        let _ = string.split_off(pos);
+        string.truncate(pos);
 
         let Some((_, ch)) = iter.next() else {
             unreachable!("String should've been checked beforehand.");
@@ -184,9 +191,7 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
-    pub fn parse(
-        string: &'src str
-    ) -> CompilerResult<'src, (Ast<'src>, SymbolTable<'src>)> {
+    pub fn parse(string: &'src str) -> CompilerResult<'src, (Ast<'src>, SymbolTable<'src>)> {
         let mut symbol_table = SymbolTable::new();
 
         let mut parser = Self {
@@ -322,7 +327,7 @@ impl<'src> Parser<'src> {
                         } else {
                             TokenKind::Greater
                         }
-                    },
+                    }
                     '<' => {
                         if self.peeking_char(|ch| ch == '=') {
                             self.advance(&mut pos);
@@ -330,13 +335,15 @@ impl<'src> Parser<'src> {
                         } else {
                             TokenKind::Less
                         }
-                    },
+                    }
                     '(' => TokenKind::LParen,
                     ')' => TokenKind::RParen,
                     '{' => TokenKind::LCurly,
                     '}' => TokenKind::RCurly,
                     '[' => TokenKind::LSquare,
                     ']' => TokenKind::RSquare,
+                    '#' => TokenKind::Hash,
+                    '@' => TokenKind::AtSymbol,
                     ';' => TokenKind::SemiColon,
                     ':' => TokenKind::Colon,
                     ',' => TokenKind::Comma,
@@ -377,6 +384,7 @@ impl<'src> Parser<'src> {
     fn parse_let_statement(
         &mut self,
         symbol_table: &mut SymbolTable<'src>,
+        argument_id: Option<RegisterID>,
     ) -> CompilerResult<'src, Ast<'src>> {
         self.expect_token(TokenKind::Let)?;
 
@@ -397,7 +405,7 @@ impl<'src> Parser<'src> {
             name.text,
             Variable {
                 data_type: data_type.clone(),
-            }
+            },
         );
 
         Ast::new(
@@ -405,6 +413,7 @@ impl<'src> Parser<'src> {
             AstKind::Declaration {
                 name: name.text,
                 data_type,
+                argument_id,
                 value,
             },
         )
@@ -420,11 +429,15 @@ impl<'src> Parser<'src> {
 
         self.expect_token(TokenKind::LParen)?;
 
+        let outer_scope_id = symbol_table.get_scope();
+
+        let scope_id = symbol_table.add_scope();
+
         let mut arguments = Vec::new();
 
         if !self.peeking_token(TokenKind::RParen)? {
             loop {
-                arguments.push(self.parse_let_statement(symbol_table)?);
+                arguments.push(self.parse_let_statement(symbol_table, Some(arguments.len()))?);
 
                 if !self.peeking_token(TokenKind::Comma)? {
                     break;
@@ -434,41 +447,50 @@ impl<'src> Parser<'src> {
             }
         }
 
+        let argument_types = arguments
+            .iter()
+            .map(|argument| {
+                let AstKind::Declaration { ref data_type, .. } = &argument.kind else {
+                    unreachable!("There should only be declarations in function argument position")
+                };
+
+                data_type.clone()
+            })
+            .collect();
+
         self.expect_token(TokenKind::RParen)?;
 
         self.expect_token(TokenKind::Colon)?;
 
         let return_type = self.parse_data_type()?;
 
+        symbol_table.enter_scope(outer_scope_id);
+
         symbol_table.add_variable(
             name.text,
             Variable {
                 data_type: DataType::Function {
                     return_type: Box::new(return_type.clone()),
-                    argument_types: arguments
-                        .iter()
-                        .map(|argument| {
-                            let AstKind::Declaration { ref data_type, .. } = &argument.kind else {
-                                unreachable!("There should only be declarations in function argument position")
-                            };
-
-                            data_type.clone()
-                        })
-                        .collect()
-                }
-            }
+                    argument_types,
+                },
+            },
         );
 
+        symbol_table.enter_scope(scope_id);
+
         let body = self.parse_block(symbol_table)?;
+
+        symbol_table.leave_scope();
 
         Ast::new(
             symbol_table,
             AstKind::FunctionDeclaration {
                 name: name.text,
+                scope_id,
                 return_type,
                 arguments,
-                body: Box::new(body)
-            }
+                body: Box::new(body),
+            },
         )
     }
 
@@ -477,7 +499,7 @@ impl<'src> Parser<'src> {
         symbol_table: &mut SymbolTable<'src>,
     ) -> CompilerResult<'src, Ast<'src>> {
         if self.peeking_token(TokenKind::Let)? {
-            return self.parse_let_statement(symbol_table);
+            return self.parse_let_statement(symbol_table, None);
         }
 
         if self.peeking_token(TokenKind::Function)? {
@@ -539,8 +561,8 @@ impl<'src> Parser<'src> {
             return Err(ParseError::UnexpectedToken(None).into());
         };
 
-        let data_type = if token.kind == TokenKind::Ident {
-            match token.text {
+        let data_type = match token.kind {
+            TokenKind::Ident => match token.text {
                 "Void" => DataType::Void,
                 "Bool" => DataType::Bool,
                 "S8" => DataType::Int(IntType::S8),
@@ -553,9 +575,9 @@ impl<'src> Parser<'src> {
                 "U64" => DataType::Int(IntType::U64),
                 "String" => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
                 _ => return Err(ParseError::UnexpectedToken(Some(token)).into()),
-            }
-        } else {
-            return Err(ParseError::UnexpectedToken(Some(token)).into());
+            },
+            TokenKind::Hash => DataType::Ref(Box::new(self.parse_data_type()?)),
+            _ => return Err(ParseError::UnexpectedToken(Some(token)).into()),
         };
 
         Ok(data_type)
@@ -618,7 +640,7 @@ impl<'src> Parser<'src> {
 
         if self.peeking_token(TokenKind::RParen)? {
             self.next_token()?;
-            return Ok(arguments)
+            return Ok(arguments);
         }
 
         loop {

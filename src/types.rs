@@ -1,5 +1,6 @@
 use crate::{
     ast::{Ast, AstKind},
+    div_round_up,
     parser::TokenKind,
     symbol_table::SymbolTable,
     CompilerResult,
@@ -7,21 +8,16 @@ use crate::{
 use std::{cmp::Eq, error::Error, fmt};
 
 pub enum TypeError<'src> {
-    TypeMismatch {
-        first: DataType,
-        second: DataType
-    },
-    ExpectedType {
-        expected: DataType,
-        found: DataType
-    },
+    TypeMismatch { first: DataType, second: DataType },
+    ExpectedType { expected: DataType, found: DataType },
     NotANumber,
     NotSigned,
     NotAssignable,
     NotAFunction,
+    NotAReference,
     WrongNumberOfArguments,
     NotDefined { name: &'src str },
-    CannotInfer
+    CannotInfer,
 }
 
 impl Error for TypeError<'_> {}
@@ -29,15 +25,22 @@ impl Error for TypeError<'_> {}
 impl fmt::Debug for TypeError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::TypeMismatch { first, second } => write!(f, "mismatched types: `{first:?}` and `{second:?}`"),
-            Self::ExpectedType { expected, found } => write!(f, "expected `{expected:?}` but found `{found:?}`"),
+            Self::TypeMismatch { first, second } => {
+                write!(f, "mismatched types: `{first:?}` and `{second:?}`")
+            }
+            Self::ExpectedType { expected, found } => {
+                write!(f, "expected `{expected:?}` but found `{found:?}`")
+            }
             Self::NotANumber => write!(f, "this is not a number, so you can't do that with it :/"),
             Self::NotSigned => write!(f, "this is not a signed number"),
             Self::NotAssignable => write!(f, "you can't assign to this expression"),
             Self::NotAFunction => write!(f, "this expression isn't a function"),
-            Self::WrongNumberOfArguments => write!(f, "wrong number of arguments passed into function"),
+            Self::NotAReference => write!(f, "this expression isn't a reference"),
+            Self::WrongNumberOfArguments => {
+                write!(f, "wrong number of arguments passed into function")
+            }
             Self::NotDefined { name } => write!(f, "variable `{name}` was not defined"),
-            Self::CannotInfer => write!(f, "cannot infer type of expression")
+            Self::CannotInfer => write!(f, "cannot infer type of expression"),
         }
     }
 }
@@ -114,7 +117,10 @@ pub enum DataType {
     Inferred(InferredType),
     Int(IntType),
     Ref(Box<Self>),
-    Function { return_type: Box<Self>, argument_types: Vec<Self> }
+    Function {
+        return_type: Box<Self>,
+        argument_types: Vec<Self>,
+    },
 }
 
 impl DataType {
@@ -146,22 +152,33 @@ impl DataType {
                             if !int_type.is_signed() {
                                 return Err(TypeError::NotSigned.into());
                             }
+
+                            node_data_type
                         }
-                        DataType::Inferred(InferredType::Int) => {}
+                        DataType::Inferred(InferredType::Int) => node_data_type,
                         _ => return Err(TypeError::NotANumber.into()),
                     },
                     TokenKind::Not => {
                         if node_data_type != DataType::Bool {
                             return Err(TypeError::ExpectedType {
                                 expected: DataType::Bool,
-                                found: node_data_type
-                            }.into());
+                                found: node_data_type,
+                            }
+                            .into());
                         }
-                    },
-                    _ => unreachable!()
-                }
 
-                node_data_type
+                        node_data_type
+                    }
+                    TokenKind::Hash => DataType::Ref(Box::new(node_data_type)),
+                    TokenKind::AtSymbol => {
+                        let DataType::Ref(ref deref) = node_data_type else {
+                            return Err(TypeError::NotAReference.into());
+                        };
+
+                        *deref.clone()
+                    }
+                    _ => unreachable!(),
+                }
             }
             AstKind::Infix {
                 ref oper,
@@ -172,27 +189,30 @@ impl DataType {
                 lhs.data_type.infer(rhs)?;
 
                 if lhs.data_type != rhs.data_type {
-                    return Err(
-                        TypeError::TypeMismatch {
-                            first: lhs.data_type.clone(),
-                            second: rhs.data_type.clone(),
-                        }
-                        .into()
-                    );
+                    return Err(TypeError::TypeMismatch {
+                        first: lhs.data_type.clone(),
+                        second: rhs.data_type.clone(),
+                    }
+                    .into());
                 }
 
                 match oper.kind {
-                    | TokenKind::Add | TokenKind::Sub
-                    | TokenKind::Mul | TokenKind::Div | TokenKind::Mod => {
+                    TokenKind::Add
+                    | TokenKind::Sub
+                    | TokenKind::Mul
+                    | TokenKind::Div
+                    | TokenKind::Mod => {
                         if !lhs.data_type.is_integer() {
                             return Err(TypeError::NotANumber.into());
                         }
 
                         lhs.data_type.clone()
                     }
-                    | TokenKind::Equals | TokenKind::NotEquals
-                    | TokenKind::Greater | TokenKind::Less
-                    | TokenKind::GreaterOrEqual | TokenKind::LessOrEqual => {
+                    TokenKind::Equals | TokenKind::NotEquals => DataType::Bool,
+                    TokenKind::Greater
+                    | TokenKind::Less
+                    | TokenKind::GreaterOrEqual
+                    | TokenKind::LessOrEqual => {
                         if !lhs.data_type.is_integer() {
                             return Err(TypeError::NotANumber.into());
                         };
@@ -210,13 +230,11 @@ impl DataType {
                 lhs.data_type.infer(rhs)?;
 
                 if lhs.data_type != rhs.data_type {
-                    return Err(
-                        TypeError::TypeMismatch {
-                            first: lhs.data_type.clone(),
-                            second: rhs.data_type.clone(),
-                        }
-                        .into()
-                    );
+                    return Err(TypeError::TypeMismatch {
+                        first: lhs.data_type.clone(),
+                        second: rhs.data_type.clone(),
+                    }
+                    .into());
                 }
 
                 if !lhs.kind.assignable() {
@@ -272,13 +290,11 @@ impl DataType {
                     if_block.data_type.infer(else_block)?;
 
                     if if_block.data_type != else_block.data_type {
-                        return Err(
-                            TypeError::TypeMismatch {
-                                first: if_block.data_type.clone(),
-                                second: else_block.data_type.clone(),
-                            }
-                            .into()
-                        );
+                        return Err(TypeError::TypeMismatch {
+                            first: if_block.data_type.clone(),
+                            second: else_block.data_type.clone(),
+                        }
+                        .into());
                     }
                 } else {
                     DataType::Void.infer(if_block)?;
@@ -318,7 +334,7 @@ impl DataType {
 
         Ok(data_type)
     }
-    
+
     pub fn infer<'src>(&self, ast: &mut Ast<'src>) -> CompilerResult<'src, ()> {
         let DataType::Inferred(ast_inferred_type) = ast.data_type else {
             if let DataType::Inferred(_) = self {
@@ -339,25 +355,61 @@ impl DataType {
         };
 
         if ast_inferred_type == InferredType::Int && !self.is_integer() {
-            return Err(
-                TypeError::ExpectedType {
-                    expected: self.clone(),
-                    found: DataType::Inferred(ast_inferred_type)
-                }
-                .into()
-            );
+            return Err(TypeError::ExpectedType {
+                expected: self.clone(),
+                found: DataType::Inferred(ast_inferred_type),
+            }
+            .into());
         }
 
         match ast.kind {
-            AstKind::Prefix { ref mut node, .. } => self.infer(node)?,
+            AstKind::Prefix {
+                ref mut node,
+                ref oper,
+            } => match oper.kind {
+                TokenKind::Sub | TokenKind::Not => self.infer(node)?,
+                TokenKind::Hash => {
+                    let DataType::Ref(ref deref) = self else {
+                            return Err(TypeError::ExpectedType {
+                                expected: self.clone(),
+                                found: ast.data_type.clone()
+                            }.into());
+                        };
+
+                    deref.infer(node)?;
+                }
+                TokenKind::AtSymbol => DataType::Ref(Box::new(self.clone())).infer(node)?,
+                _ => unreachable!(),
+            },
             AstKind::Infix {
                 ref mut lhs,
                 ref mut rhs,
-                ..
-            } => {
-                self.infer(lhs)?;
-                self.infer(rhs)?;
-            }
+                ref oper,
+            } => match oper.kind {
+                TokenKind::Add
+                | TokenKind::Sub
+                | TokenKind::Mul
+                | TokenKind::Div
+                | TokenKind::Mod => {
+                    self.infer(lhs)?;
+                    self.infer(rhs)?;
+                }
+                TokenKind::Equals
+                | TokenKind::NotEquals
+                | TokenKind::Less
+                | TokenKind::Greater
+                | TokenKind::LessOrEqual
+                | TokenKind::GreaterOrEqual => {
+                    if *self != DataType::Bool {
+                        return Err(TypeError::ExpectedType {
+                            expected: DataType::Bool,
+                            found: self.clone(),
+                        }
+                        .into());
+                    }
+                }
+                _ => unreachable!(),
+            },
             AstKind::Block {
                 ref mut statements, ..
             } => {
@@ -393,7 +445,7 @@ impl DataType {
         match self {
             Self::Int(int_type) if int_type.is_signed() => true,
             Self::Inferred(InferredType::Int) => true,
-            _ => false
+            _ => false,
         }
     }
 
@@ -402,10 +454,13 @@ impl DataType {
             Self::Void => 0,
             Self::Bool => 1,
             Self::Int(int_type) => int_type.size(),
-            Self::Ref(_)
-            | Self::Function { .. } => 8,
+            Self::Ref(_) | Self::Function { .. } => 8,
             _ => unreachable!(),
         }
+    }
+
+    pub fn size_aligned(&self) -> usize {
+        div_round_up(self.size(), 8) * 8
     }
 }
 
@@ -417,7 +472,10 @@ impl fmt::Debug for DataType {
             Self::Inferred(inferred) => write!(f, "{inferred:?}"),
             Self::Int(int) => write!(f, "{int:?}"),
             Self::Ref(deref) => write!(f, "#{deref:?}"),
-            Self::Function { return_type, argument_types } => {
+            Self::Function {
+                return_type,
+                argument_types,
+            } => {
                 write!(
                     f,
                     "Fn ({}) -> {return_type:?}",

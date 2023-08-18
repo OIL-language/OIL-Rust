@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Hash, PartialEq, Eq)]
 pub struct VariableID<'src> {
     name: &'src str,
-    scope_id: ScopeID
+    scope_id: ScopeID,
 }
 
 pub type ScopeID = usize;
@@ -25,7 +25,13 @@ impl<'src> SymbolTable<'src> {
     }
 
     pub fn add_variable(&mut self, name: &'src str, variable: Variable) {
-        self.variables.insert(VariableID { name, scope_id: self.scope_id }, variable);
+        self.variables.insert(
+            VariableID {
+                name,
+                scope_id: self.scope_id,
+            },
+            variable,
+        );
     }
 
     pub fn get_variable(&self, name: &'src str) -> Option<&Variable> {
@@ -101,9 +107,12 @@ impl<'src> Default for SymbolTable<'src> {
             Variable {
                 data_type: DataType::Function {
                     return_type: Box::new(DataType::Void),
-                    argument_types: vec![DataType::Ref(Box::new(DataType::Int(IntType::U8))), DataType::Int(IntType::U64)]
-                }
-            }
+                    argument_types: vec![
+                        DataType::Ref(Box::new(DataType::Int(IntType::U8))),
+                        DataType::Int(IntType::U64),
+                    ],
+                },
+            },
         );
 
         symbol_table

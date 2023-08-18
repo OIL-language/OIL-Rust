@@ -1,8 +1,4 @@
-use oil::{
-    compiler::Compiler,
-    parser::Parser,
-    CompilerResult,
-};
+use oil::{compiler::Compiler, parser::Parser, CompilerResult};
 use std::{
     env,
     fs::{self, File},
@@ -20,8 +16,7 @@ fn main() -> CompilerResult<'static, ()> {
 
     let input_file = fs::read_to_string(input_file_path)?;
 
-    let (ast, symbol_table) = Parser::parse(&input_file)
-        .map_err(|e| e.to_string())?;
+    let (ast, symbol_table) = Parser::parse(&input_file).map_err(|e| e.to_string())?;
 
     let code = Compiler::compile(ast, symbol_table);
 

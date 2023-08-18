@@ -1,4 +1,5 @@
 use crate::{
+    bytecode::RegisterID,
     parser::{Token, TokenKind},
     symbol_table::SymbolTable,
     types::DataType,
@@ -31,10 +32,12 @@ pub enum AstKind<'src> {
     Declaration {
         name: &'src str,
         data_type: DataType,
+        argument_id: Option<RegisterID>,
         value: Option<Box<Ast<'src>>>,
     },
     FunctionDeclaration {
         name: &'src str,
+        scope_id: usize,
         return_type: DataType,
         arguments: Vec<Ast<'src>>,
         body: Box<Ast<'src>>,
@@ -63,6 +66,12 @@ impl<'src> AstKind<'src> {
                     kind: TokenKind::Ident,
                     ..
                 }
+            } | Self::Prefix {
+                oper: Token {
+                    kind: TokenKind::AtSymbol,
+                    ..
+                },
+                ..
             }
         )
     }

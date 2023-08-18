@@ -1,4 +1,5 @@
-use crate::{div_round_up, types::DataType};
+use crate::types::DataType;
+use std::iter;
 
 fn nasm_oper_text(data_type: &DataType) -> &str {
     match data_type.size() {
@@ -53,27 +54,21 @@ impl NasmRegister {
 }
 
 pub type RegisterID = usize;
-
 pub type LabelID = usize;
-
-#[derive(Debug, Clone)]
-pub struct Register {
-    pub data_type: DataType,
-    pub stack_pos: usize,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Argument {
-    Constant {
-        value: u64,
-        data_type: DataType
-    },
+    Constant { value: u64, data_type: DataType },
     Register(RegisterID),
-    Symbol {
-        name: String,
-        data_type: DataType
-    },
+    Argument(RegisterID),
+    Symbol { name: String, data_type: DataType },
     VoidRegister,
+}
+
+impl Argument {
+    fn is_not_nasm_comparable(&self) -> bool {
+        matches!(self, Self::Register(_) | Self::Argument(_))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +99,14 @@ pub enum OpCode {
     },
     Not {
         dst: Argument,
+    },
+    Ref {
+        dst: Argument,
+        src: Argument,
+    },
+    Deref {
+        dst: Argument,
+        src: Argument,
     },
     SetIfEqual {
         dst: Argument,
@@ -155,46 +158,79 @@ pub enum OpCode {
     Call {
         dst: Argument,
         lhs: Argument,
-        arguments: Vec<Argument>
-    }
+        arguments: Vec<Argument>,
+    },
 }
 
 #[derive(Debug)]
 pub struct Function<'src> {
     name: &'src str,
     label_id: LabelID,
-    pub return_value: RegisterID,
-    registers: Vec<Register>,
+    arguments: Vec<DataType>,
+    arguments_size: usize,
+    registers: Vec<DataType>,
+    registers_size: usize,
     opcodes: Vec<OpCode>,
 }
 
 impl<'src> Function<'src> {
-    pub fn new(name: &'src str, return_type: DataType) -> Self {
-        Self {
+    pub fn new<'a>(name: &'src str, arguments: Vec<DataType>, return_type: DataType) -> Self {
+        let (arguments, arguments_size) = iter::once(return_type.clone()).chain(arguments).fold(
+            (Vec::new(), 0),
+            |(mut vec, stack_size), data_type| {
+                let size = data_type.size_aligned();
+
+                vec.push(data_type);
+
+                (vec, stack_size + size)
+            },
+        );
+
+        let mut function = Self {
             name,
             label_id: 0,
-            return_value: 0,
-            registers: vec![Register {
-                stack_pos: 0,
-                data_type: return_type,
-            }],
+            arguments,
+            arguments_size,
+            registers: Vec::new(),
+            registers_size: 0,
             opcodes: Vec::new(),
-        }
+        };
+
+        function.add_register(return_type);
+
+        function
+    }
+
+    // kinda useless
+    #[inline(always)]
+    pub const fn return_value(&self) -> Argument {
+        Argument::Argument(0)
     }
 
     pub fn stack_size(&self) -> usize {
-        self.registers.iter().last().map_or(0, |register| {
-            register.stack_pos + div_round_up(register.data_type.size(), 8) * 8
-        })
+        self.arguments_size + self.registers_size
     }
 
     pub fn add_register(&mut self, data_type: DataType) -> RegisterID {
-        self.registers.push(Register {
-            data_type,
-            stack_pos: self.stack_size(),
-        });
+        self.registers_size += data_type.size_aligned();
+
+        self.registers.push(data_type);
 
         self.registers.len() - 1
+    }
+
+    fn register_position(&self, register_id: RegisterID) -> usize {
+        self.registers
+            .iter()
+            .take(register_id)
+            .fold(0, |n, data_type| n + data_type.size_aligned())
+    }
+
+    fn argument_position(&self, argument_id: RegisterID) -> usize {
+        self.arguments
+            .iter()
+            .take(argument_id)
+            .fold(0, |n, data_type| n + data_type.size_aligned())
     }
 
     pub fn add_label(&mut self) -> LabelID {
@@ -205,15 +241,11 @@ impl<'src> Function<'src> {
         prev_label_id
     }
 
-    pub fn get_register(&self, id: RegisterID) -> &Register {
-        &self.registers[id]
-    }
-
     pub fn argument_data_type(&self, argument: &'src Argument) -> &DataType {
         match argument {
-            Argument::Constant { data_type, .. }
-            | Argument::Symbol { data_type, .. } => data_type,
-            Argument::Register(register_id) => &self.registers[*register_id].data_type,
+            Argument::Constant { data_type, .. } | Argument::Symbol { data_type, .. } => data_type,
+            Argument::Register(register_id) => &self.registers[*register_id],
+            Argument::Argument(argument_id) => &self.arguments[*argument_id],
             Argument::VoidRegister => unreachable!(),
         }
     }
@@ -222,26 +254,23 @@ impl<'src> Function<'src> {
         self.opcodes.push(opcode);
     }
 
-    fn compile_nasm_argument_explicit(&self, argument: &Argument) -> String {
-        match argument {
-            Argument::Constant { value, .. } => value.to_string(),
-            Argument::Register(register) => {
-                let register = &self.registers[*register];
-                format!(
-                    "{} [rsp + {}]",
-                    nasm_oper_text(&register.data_type),
-                    register.stack_pos
-                )
-            }
-            Argument::Symbol { name, .. } => name.clone(),
-            Argument::VoidRegister => unreachable!(),
-        }
-    }
-
     fn compile_nasm_argument(&self, argument: &Argument) -> String {
         match argument {
             Argument::Constant { value, .. } => value.to_string(),
-            Argument::Register(register) => format!("[rsp + {}]", &self.registers[*register].stack_pos),
+            Argument::Register(register_id) => {
+                format!(
+                    "{} [rbp - {}]",
+                    nasm_oper_text(&self.registers[*register_id]),
+                    8 + self.register_position(*register_id)
+                )
+            }
+            Argument::Argument(argument_id) => {
+                format!(
+                    "{} [rbp + {}]",
+                    nasm_oper_text(&self.arguments[*argument_id]),
+                    8 + self.arguments_size - self.argument_position(*argument_id)
+                )
+            }
             Argument::Symbol { name, .. } => name.clone(),
             Argument::VoidRegister => unreachable!(),
         }
@@ -257,9 +286,9 @@ impl<'src> Function<'src> {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
-                if let Argument::Register(_) = src {
+                if src.is_not_nasm_comparable() {
                     format!("    mov {rax}, {src_compiled}\n    mov {dst_compiled}, {rax}\n")
                 } else {
                     format!("    mov {dst_compiled}, {src_compiled}\n")
@@ -269,9 +298,9 @@ impl<'src> Function<'src> {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
-                if let Argument::Register(_) = src {
+                if src.is_not_nasm_comparable() {
                     format!("    mov {rax}, {src_compiled}\n    add {dst_compiled}, {rax}\n")
                 } else {
                     format!("    add {dst_compiled}, {src_compiled}\n")
@@ -281,9 +310,9 @@ impl<'src> Function<'src> {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
-                if let Argument::Register(_) = src {
+                if src.is_not_nasm_comparable() {
                     format!("    mov {rax}, {src_compiled}\n    sub {dst_compiled}, {rax}\n")
                 } else {
                     format!("    sub {dst_compiled}, {src_compiled}\n")
@@ -301,11 +330,12 @@ impl<'src> Function<'src> {
             OpCode::Div { dst, src } => {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
                 let rbx = NasmRegister::Rbx.register_text(self.argument_data_type(dst));
+                let rdx = NasmRegister::Rdx.register_text(self.argument_data_type(dst));
 
                 let src_compiled = self.compile_nasm_argument(src);
                 let dst_compiled = self.compile_nasm_argument(dst);
 
-                format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rax}\n")
+                format!("    mov {rdx}, 0\n    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rax}\n")
             }
             OpCode::Mod { dst, src } => {
                 let rax = NasmRegister::Rax.register_text(self.argument_data_type(dst));
@@ -315,12 +345,29 @@ impl<'src> Function<'src> {
                 let src_compiled = self.compile_nasm_argument(src);
                 let dst_compiled = self.compile_nasm_argument(dst);
 
-                format!("    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rdx}\n")
+                format!("    mov {rdx}, 0\n    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    div {rbx}\n    mov {dst_compiled}, {rdx}\n")
             }
             OpCode::Not { dst } => {
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    and {dst_compiled}, 0x1\n    xor {dst_compiled}, 0x1\n")
+            }
+            OpCode::Ref { dst, src } => {
+                let dst_compiled = self.compile_nasm_argument(dst);
+                let src_compiled = self.compile_nasm_argument(dst);
+
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(src));
+
+                format!("    lea {rax}, {dst_compiled}\n    mov {src_compiled}, {rax}\n")
+            }
+            OpCode::Deref { dst, src } => {
+                let dst_compiled = self.compile_nasm_argument(dst);
+                let src_compiled = self.compile_nasm_argument(src);
+
+                let rax = NasmRegister::Rax.register_text(self.argument_data_type(src));
+                let rbx = NasmRegister::Rbx.register_text(self.argument_data_type(dst));
+
+                format!("    mov {rax}, {src_compiled}\n    mov {rbx}, [{rax}]\n    mov {dst_compiled}, {rbx}\n")
             }
             OpCode::SetIfEqual { dst, lhs, rhs } => {
                 assert_eq!(*self.argument_data_type(dst), DataType::Bool);
@@ -329,7 +376,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    sete {dst_compiled}\n")
             }
@@ -340,7 +387,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setne {dst_compiled}\n")
             }
@@ -351,7 +398,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setg {dst_compiled}\n")
             }
@@ -362,7 +409,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setl {dst_compiled}\n")
             }
@@ -373,7 +420,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setge {dst_compiled}\n")
             }
@@ -384,7 +431,7 @@ impl<'src> Function<'src> {
 
                 let lhs_compiled = self.compile_nasm_argument(lhs);
                 let rhs_compiled = self.compile_nasm_argument(rhs);
-                let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                let dst_compiled = self.compile_nasm_argument(dst);
 
                 format!("    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    setle {dst_compiled}\n")
             }
@@ -419,34 +466,55 @@ impl<'src> Function<'src> {
 
                 format!("    mov {rax}, {condition_compiled}\n    test {rax}, {rax}\n    jnz .L{label_id}\n")
             }
-            OpCode::Call { dst, lhs, arguments } => {
-                let lhs_compiled = self.compile_nasm_argument_explicit(lhs);
+            OpCode::Call {
+                dst,
+                lhs,
+                arguments,
+            } => {
+                let lhs_compiled = self.compile_nasm_argument(lhs);
 
+                // generate the code that pushes all the function arguments onto the stack
                 let push_arguments_code = arguments
                     .iter()
                     .rev()
-                    .map(|argument| format!("    push {}\n", self.compile_nasm_argument_explicit(argument)))
+                    .map(|argument| {
+                        let rax =
+                            NasmRegister::Rax.register_text(self.argument_data_type(argument));
+
+                        format!(
+                            "    mov {rax}, {}\n    push rax\n",
+                            self.compile_nasm_argument(argument)
+                        )
+                    })
                     .collect::<String>();
 
+                // get the size of the section of the stack used for arguments
                 let argument_stack_size = arguments
                     .iter()
-                    .map(|argument| self.argument_data_type(argument).size())
+                    .map(|argument| self.argument_data_type(argument).size_aligned())
                     .sum::<usize>();
 
-                let call_code = if let Argument::Register(_) = lhs {
+                // generate the code for calling the function
+                let call_code = if let Argument::Symbol { .. } = lhs {
+                    format!("    call {lhs_compiled}\n")
+                } else {
                     let rax = NasmRegister::Rax.register_text(self.argument_data_type(lhs));
 
                     format!("    mov {rax}, {lhs_compiled}\n    call {rax}\n")
-                } else {
-                    format!("    call {lhs_compiled}\n")
                 };
 
-                if let Argument::VoidRegister = dst {
+                let DataType::Function { return_type, .. } = self.argument_data_type(lhs) else {
+                    unreachable!("This should be a function. If there was an error, it should have been caught in the typechecking phase.")
+                };
+
+                // for a void function, we don't need to store any "result variable"
+                // TODO: when we can, use rax instead
+                if **return_type == DataType::Void {
                     format!("{push_arguments_code}{call_code}    add rsp, {argument_stack_size}\n")
                 } else {
-                    let dst_compiled = self.compile_nasm_argument_explicit(dst);
+                    let dst_compiled = self.compile_nasm_argument(dst);
 
-                    format!("{push_arguments_code}    push {dst_compiled}\n{call_code}    pop {dst_compiled}\n    add rsp, {argument_stack_size}\n")
+                    format!("    push {dst_compiled}\n{push_arguments_code}{call_code}    add rsp, {argument_stack_size}\n    pop {dst_compiled}\n")
                 }
             }
         };
@@ -455,19 +523,16 @@ impl<'src> Function<'src> {
     }
 
     pub fn compile_nasm(&self) -> String {
-        let code = self.opcodes
+        let code = self
+            .opcodes
             .iter()
             .filter_map(|opcode| self.compile_nasm_opcode(opcode))
             .collect::<String>();
 
-        let rax = NasmRegister::Rax.register_text(&self.get_register(self.return_value).data_type);
-
-        let return_value_compiled = self.compile_nasm_argument(&Argument::Register(self.return_value));
-
         format!(
-            "{name}:\n    enter {size}, 0\n{code}    mov {rax}, {return_value_compiled}\n    leave\n    ret\n",
-            size = self.stack_size(),
-            name = self.name,
+            "{}:\n    enter {}, 0\n{code}    leave\n    ret\n",
+            self.name,
+            self.stack_size(),
         )
     }
 }
@@ -505,22 +570,25 @@ print:
     enter 0, 0
     mov rax, 1
     mov rdi, 1
-    mov rsi, [rbp + 16]
-    mov rdx, [rbp + 24]
+    mov rsi, [rbp + 24]
+    mov rdx, [rbp + 16]
     syscall
     leave
     ret
 _start:
-    call main
-    mov rdi, rax
+    sub rsp, 8
+    call @main
     mov rax, 60
+    pop rdi
     syscall
 {}section .data
 {}",
-            self.functions.iter()
+            self.functions
+                .iter()
                 .map(|function| function.compile_nasm())
                 .collect::<String>(),
-            self.symbols.iter()
+            self.symbols
+                .iter()
                 .map(|(name, data)| {
                     format!(
                         "{name}: db {}\n",

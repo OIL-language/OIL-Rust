@@ -1,19 +1,16 @@
 use crate::{
     ast::{Ast, AstKind},
-    bytecode::{Argument, ByteCode, Function, OpCode, RegisterID},
+    bytecode::{Argument, ByteCode, Function, OpCode},
     parser::TokenKind,
     symbol_table::{SymbolTable, VariableID},
-    types::DataType
+    types::DataType,
 };
-use std::{
-    collections::HashMap,
-    borrow::Cow
-};
+use std::{borrow::Cow, collections::HashMap};
 
 pub struct Compiler<'src> {
     symbol_table: SymbolTable<'src>,
     bytecode: ByteCode<'src>,
-    variable_registers: HashMap<VariableID<'src>, RegisterID>,
+    variable_registers: HashMap<VariableID<'src>, Argument>,
 }
 
 impl<'src> Compiler<'src> {
@@ -21,90 +18,85 @@ impl<'src> Compiler<'src> {
         let mut compiler = Self {
             symbol_table,
             bytecode: ByteCode::new(),
-            variable_registers: HashMap::new()
+            variable_registers: HashMap::new(),
         };
 
-        let mut main = Function::new("@main", ast.data_type.clone());
+        let mut main = Function::new("@main", Vec::new(), ast.data_type.clone());
 
-        let dst = Argument::Register(main.return_value);
+        let dst = main.return_value();
 
-        compiler.compile_ast(&ast, &mut main, Some(dst));
+        let data = compiler.compile_ast(&ast, &mut main);
+
+        main.add_opcode(OpCode::Mov { dst, src: data });
 
         compiler.bytecode.add_function(main);
+
+        println!("{:#?}", compiler.bytecode);
 
         compiler.bytecode.compile_nasm()
     }
 
-    fn compile_ast(&mut self, ast: &'src Ast<'src>, function: &mut Function<'src>, dst: Option<Argument>) -> Argument {
+    fn compile_ast(&mut self, ast: &'src Ast<'src>, function: &mut Function<'src>) -> Argument {
         match &ast.kind {
-            AstKind::Node { ref token } => {
-                let node = match &token.kind {
-                    TokenKind::Number(value) => Argument::Constant {
-                        value: *value,
-                        data_type: ast.data_type.clone(),
-                    },
-                    TokenKind::Ident => {
-                        let variable_id = self.symbol_table
+            AstKind::Node { ref token } => match &token.kind {
+                TokenKind::Number(value) => Argument::Constant {
+                    value: *value,
+                    data_type: ast.data_type.clone(),
+                },
+                TokenKind::Ident => {
+                    let variable_id = self.symbol_table
                             .get_variable_id(token.text)
                             .expect("Variable not being predefined was not caught in the typechecking phase, this is a compiler bug");
 
-                        self.variable_registers
-                            .get(&variable_id)
-                            .map_or(
-                                Argument::Symbol {
-                                    name: token.text.to_string(),
-                                    data_type: ast.data_type.clone()
-                                },
-                                |register| Argument::Register(*register)
-                            )
-                    },
-                    TokenKind::Str(text) => {
-                        let text = match &text {
-                            Cow::Owned(owned) => owned.as_bytes(),
-                            Cow::Borrowed(borrowed) => borrowed.as_bytes()
-                        };
+                    self.variable_registers
+                        .get(&variable_id)
+                        .cloned()
+                        .unwrap_or(Argument::Symbol {
+                            name: token.text.to_string(),
+                            data_type: ast.data_type.clone(),
+                        })
+                }
+                TokenKind::Str(text) => {
+                    let text = match &text {
+                        Cow::Owned(owned) => owned.as_bytes(),
+                        Cow::Borrowed(borrowed) => borrowed.as_bytes(),
+                    };
 
-                        let name = format!("str_{}", self.bytecode.symbols_len());
+                    let name = format!("str_{}", self.bytecode.symbols_len());
 
-                        self.bytecode.add_symbol(name.clone(), text);
+                    self.bytecode.add_symbol(name.clone(), text);
 
-                        Argument::Symbol {
-                            name,
-                            data_type: ast.data_type.clone()
-                        }
-                    },
-                    TokenKind::True => Argument::Constant {
-                        value: 1,
-                        data_type: DataType::Bool,
-                    },
-                    TokenKind::False => Argument::Constant {
-                        value: 0,
-                        data_type: DataType::Bool,
-                    },
-                    _ => unreachable!(),
-                };
-
-                dst.map_or(node.clone(), |dst| {
-                    function.add_opcode(OpCode::Mov {
-                        dst: dst.clone(),
-                        src: node,
-                    });
-                    dst
-                })
-            }
+                    Argument::Symbol {
+                        name,
+                        data_type: ast.data_type.clone(),
+                    }
+                }
+                TokenKind::True => Argument::Constant {
+                    value: 1,
+                    data_type: DataType::Bool,
+                },
+                TokenKind::False => Argument::Constant {
+                    value: 0,
+                    data_type: DataType::Bool,
+                },
+                _ => unreachable!(),
+            },
             AstKind::Infix {
                 ref oper,
                 ref lhs,
                 ref rhs,
             } => {
-                let dst = dst.unwrap_or_else(|| {
-                    Argument::Register(function.add_register(ast.data_type.clone()))
-                });
+                let dst = Argument::Register(function.add_register(ast.data_type.clone()));
+
+                let lhs = self.compile_ast(lhs, function);
+                let rhs = self.compile_ast(rhs, function);
 
                 match oper.kind {
                     TokenKind::Add => {
-                        let _lhs = self.compile_ast(lhs, function, Some(dst.clone()));
-                        let rhs = self.compile_ast(rhs, function, None);
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: lhs,
+                        });
 
                         function.add_opcode(OpCode::Add {
                             dst: dst.clone(),
@@ -112,8 +104,10 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Sub => {
-                        let _lhs = self.compile_ast(lhs, function, Some(dst.clone()));
-                        let rhs = self.compile_ast(rhs, function, None);
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: lhs,
+                        });
 
                         function.add_opcode(OpCode::Sub {
                             dst: dst.clone(),
@@ -121,8 +115,10 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Mul => {
-                        let _lhs = self.compile_ast(lhs, function, Some(dst.clone()));
-                        let rhs = self.compile_ast(rhs, function, None);
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: lhs,
+                        });
 
                         function.add_opcode(OpCode::Mul {
                             dst: dst.clone(),
@@ -130,8 +126,10 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Div => {
-                        let _lhs = self.compile_ast(lhs, function, Some(dst.clone()));
-                        let rhs = self.compile_ast(rhs, function, None);
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: lhs,
+                        });
 
                         function.add_opcode(OpCode::Div {
                             dst: dst.clone(),
@@ -139,8 +137,10 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Mod => {
-                        let _lhs = self.compile_ast(lhs, function, Some(dst.clone()));
-                        let rhs = self.compile_ast(rhs, function, None);
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: lhs,
+                        });
 
                         function.add_opcode(OpCode::Mod {
                             dst: dst.clone(),
@@ -148,9 +148,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Equals => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfEqual {
                             dst: dst.clone(),
                             lhs,
@@ -158,9 +155,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::NotEquals => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfNotEqual {
                             dst: dst.clone(),
                             lhs,
@@ -168,9 +162,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Greater => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfGreater {
                             dst: dst.clone(),
                             lhs,
@@ -178,9 +169,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::Less => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfLess {
                             dst: dst.clone(),
                             lhs,
@@ -188,9 +176,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::GreaterOrEqual => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfGreaterOrEqual {
                             dst: dst.clone(),
                             lhs,
@@ -198,9 +183,6 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::LessOrEqual => {
-                        let lhs = self.compile_ast(lhs, function, None);
-                        let rhs = self.compile_ast(rhs, function, None);
-
                         function.add_opcode(OpCode::SetIfLessOrEqual {
                             dst: dst.clone(),
                             lhs,
@@ -213,23 +195,43 @@ impl<'src> Compiler<'src> {
                 dst
             }
             AstKind::Prefix { ref oper, ref node } => {
-                let dst = dst.unwrap_or_else(|| {
-                    Argument::Register(function.add_register(ast.data_type.clone()))
-                });
+                let dst = Argument::Register(function.add_register(ast.data_type.clone()));
 
-                let _node = self.compile_ast(node, function, Some(dst.clone()));
+                let node = self.compile_ast(node, function);
 
                 match oper.kind {
-                    TokenKind::Sub => function.add_opcode(OpCode::Negate { dst: dst.clone() }),
-                    TokenKind::Not => function.add_opcode(OpCode::Not { dst: dst.clone() }),
+                    TokenKind::Sub => {
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: node.clone(),
+                        });
+                        function.add_opcode(OpCode::Negate { dst: dst.clone() });
+                    }
+                    TokenKind::Not => {
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: node.clone(),
+                        });
+                        function.add_opcode(OpCode::Not { dst: dst.clone() });
+                    }
+                    TokenKind::Hash => function.add_opcode(OpCode::Ref {
+                        dst: dst.clone(),
+                        src: node.clone(),
+                    }),
+                    TokenKind::AtSymbol => function.add_opcode(OpCode::Deref {
+                        dst: dst.clone(),
+                        src: node.clone(),
+                    }),
                     _ => unreachable!(),
                 }
 
                 dst
             }
             AstKind::Assign { ref lhs, ref rhs } => {
-                let lhs = self.compile_ast(lhs, function, None);
-                let _rhs = self.compile_ast(rhs, function, Some(lhs.clone()));
+                let lhs = self.compile_ast(lhs, function);
+                let rhs = self.compile_ast(rhs, function);
+
+                function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
 
                 Argument::VoidRegister
             }
@@ -237,22 +239,22 @@ impl<'src> Compiler<'src> {
                 scope_id,
                 ref statements,
             } => {
-                let dst = dst.unwrap_or_else(|| {
-                    if let DataType::Void = ast.data_type {
-                        Argument::VoidRegister
-                    } else {
-                        Argument::Register(function.add_register(ast.data_type.clone()))
-                    }
-                });
-
                 self.symbol_table.enter_scope(*scope_id);
 
+                let dst = if ast.data_type == DataType::Void {
+                    Argument::VoidRegister
+                } else {
+                    Argument::Register(function.add_register(ast.data_type.clone()))
+                };
+
                 for (n, statement) in statements.iter().enumerate() {
-                    let _statement = if n + 1 == statements.len() && ast.data_type != DataType::Void
-                    {
-                        self.compile_ast(statement, function, Some(dst.clone()))
-                    } else {
-                        self.compile_ast(statement, function, None)
+                    let statement = self.compile_ast(statement, function);
+
+                    if n + 1 == statements.len() && ast.data_type != DataType::Void {
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: statement,
+                        });
                     };
                 }
 
@@ -263,36 +265,72 @@ impl<'src> Compiler<'src> {
             AstKind::Declaration {
                 name,
                 ref data_type,
+                argument_id,
                 ref value,
             } => {
-                let variable = function.add_register(data_type.clone());
+                let variable = if let Some(argument_id) = argument_id {
+                    Argument::Argument(*argument_id + 1)
+                } else {
+                    Argument::Register(function.add_register(data_type.clone()))
+                };
 
                 self.variable_registers.insert(
-                    self.symbol_table
-                        .get_variable_id(name)
-                        .expect("Unreachable: this variable should have been defined in the parsing stage"),
-                    variable
+                    self.symbol_table.get_variable_id(name).expect(
+                        "Unreachable: this variable should have been defined in the parsing stage",
+                    ),
+                    variable.clone(),
                 );
 
                 if let Some(value) = value {
-                    self.compile_ast(value, function, Some(Argument::Register(variable)));
+                    let value = self.compile_ast(value, function);
+                    function.add_opcode(OpCode::Mov {
+                        dst: variable,
+                        src: value,
+                    });
                 }
 
                 Argument::VoidRegister
             }
             AstKind::FunctionDeclaration {
                 name,
+                scope_id,
                 ref return_type,
+                ref arguments,
                 ref body,
                 ..
             } => {
-                let mut function = Function::new(name, return_type.clone());
+                let argument_types = arguments.iter()
+                    .map(|ast| {
+                        let AstKind::Declaration { ref data_type, .. } = ast.kind else {
+                            unreachable!("There can only be declarations in the arguments space of a function")
+                        };
 
-                let dst = Argument::Register(function.return_value); 
+                        data_type.clone()
+                    })
+                    .collect();
 
-                self.compile_ast(body, &mut function, Some(dst));
+                let mut function = Function::new(name, argument_types, return_type.clone());
+
+                self.symbol_table.enter_scope(*scope_id);
+
+                for argument in arguments {
+                    let _ = self.compile_ast(argument, &mut function);
+                }
+
+                let dst = function.return_value();
+
+                let return_value = self.compile_ast(body, &mut function);
+
+                if *return_type != DataType::Void {
+                    function.add_opcode(OpCode::Mov {
+                        dst,
+                        src: return_value,
+                    });
+                }
 
                 self.bytecode.add_function(function);
+
+                self.symbol_table.leave_scope();
 
                 Argument::VoidRegister
             }
@@ -301,15 +339,13 @@ impl<'src> Compiler<'src> {
                 if_block,
                 else_block,
             } => {
-                let dst = dst.unwrap_or_else(|| {
-                    if let DataType::Void = ast.data_type {
-                        Argument::VoidRegister
-                    } else {
-                        Argument::Register(function.add_register(ast.data_type.clone()))
-                    }
-                });
+                let dst = if ast.data_type == DataType::Void {
+                    Argument::VoidRegister
+                } else {
+                    Argument::Register(function.add_register(ast.data_type.clone()))
+                };
 
-                let condition = self.compile_ast(condition, function, None);
+                let condition = self.compile_ast(condition, function);
 
                 let else_label = function.add_label();
                 let end_label = function.add_label();
@@ -319,17 +355,32 @@ impl<'src> Compiler<'src> {
                     label_id: else_label,
                 });
 
-                let _if_block = self.compile_ast(if_block, function, Some(dst.clone()));
+                let if_block = self.compile_ast(if_block, function);
+
+                if ast.data_type != DataType::Void {
+                    function.add_opcode(OpCode::Mov {
+                        dst: dst.clone(),
+                        src: if_block,
+                    });
+                }
 
                 function.add_opcode(OpCode::Goto {
                     label_id: end_label,
                 });
+
                 function.add_opcode(OpCode::Label {
                     label_id: else_label,
                 });
 
                 if let Some(ref else_block) = else_block {
-                    let _else_block = self.compile_ast(else_block, function, Some(dst.clone()));
+                    let else_block = self.compile_ast(else_block, function);
+
+                    if ast.data_type != DataType::Void {
+                        function.add_opcode(OpCode::Mov {
+                            dst: dst.clone(),
+                            src: else_block,
+                        });
+                    }
                 }
 
                 function.add_opcode(OpCode::Label {
@@ -346,18 +397,19 @@ impl<'src> Compiler<'src> {
                     label_id: start_label,
                 });
 
-                let condition = self.compile_ast(condition, function, None);
+                let condition = self.compile_ast(condition, function);
 
                 function.add_opcode(OpCode::GotoIfZero {
                     condition,
                     label_id: end_label,
                 });
 
-                let _body = self.compile_ast(body, function, None);
+                let _body = self.compile_ast(body, function);
 
                 function.add_opcode(OpCode::Goto {
                     label_id: start_label,
                 });
+
                 function.add_opcode(OpCode::Label {
                     label_id: end_label,
                 });
@@ -365,25 +417,24 @@ impl<'src> Compiler<'src> {
                 Argument::VoidRegister
             }
             AstKind::Call { lhs, arguments } => {
-                let dst = dst.unwrap_or_else(|| {
-                    if let DataType::Void = ast.data_type {
-                        Argument::VoidRegister
-                    } else {
-                        Argument::Register(function.add_register(ast.data_type.clone()))
-                    }
-                });
+                let dst = if ast.data_type == DataType::Void {
+                    Argument::VoidRegister
+                } else {
+                    Argument::Register(function.add_register(ast.data_type.clone()))
+                };
 
-                let lhs = self.compile_ast(lhs, function, None);
+                let lhs = self.compile_ast(lhs, function);
 
                 let arguments = arguments
                     .iter()
-                    .map(|argument| self.compile_ast(argument, function, None))
+                    .rev()
+                    .map(|argument| self.compile_ast(argument, function))
                     .collect::<Vec<Argument>>();
 
                 function.add_opcode(OpCode::Call {
                     dst: dst.clone(),
                     lhs,
-                    arguments
+                    arguments,
                 });
 
                 dst
