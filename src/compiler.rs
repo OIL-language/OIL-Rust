@@ -1,7 +1,7 @@
 use crate::{
     ast::{Ast, AstKind},
     bytecode::{Argument, ByteCode, Function, OpCode},
-    parser::TokenKind,
+    parser::{Token, TokenKind},
     symbol_table::{SymbolTable, VariableID},
     types::DataType,
 };
@@ -79,8 +79,8 @@ impl<'src> Compiler<'src> {
             } => {
                 let dst = Argument::Register(function.add_register(ast.data_type.clone()));
 
-                let lhs = self.compile_ast(&lhs, function);
-                let rhs = self.compile_ast(&rhs, function);
+                let lhs = self.compile_ast(lhs, function);
+                let rhs = self.compile_ast(rhs, function);
 
                 match oper.kind {
                     TokenKind::Add => {
@@ -186,41 +186,62 @@ impl<'src> Compiler<'src> {
                 dst
             }
             AstKind::Prefix { ref oper, ref node } => {
+                let dst = Argument::Register(function.add_register(ast.data_type.clone()));
+
                 let node = self.compile_ast(node, function);
 
                 match oper.kind {
                     TokenKind::Sub => {
-                        let dst = Argument::Register(function.add_register(ast.data_type.clone()));
-
                         function.add_opcode(OpCode::Mov {
                             dst: dst.clone(),
                             src: node.clone(),
                         });
 
                         function.add_opcode(OpCode::Negate { dst: dst.clone() });
-
-                        dst
                     }
                     TokenKind::Not => {
-                        let dst = Argument::Register(function.add_register(ast.data_type.clone()));
-
                         function.add_opcode(OpCode::Mov {
                             dst: dst.clone(),
                             src: node.clone(),
                         });
 
                         function.add_opcode(OpCode::Not { dst: dst.clone() });
-
-                        dst
+                    }
+                    TokenKind::Hash => {
+                        function.add_opcode(OpCode::Ref {
+                            dst: dst.clone(),
+                            src: node.clone(),
+                        });
+                    }
+                    TokenKind::AtSymbol => {
+                        function.add_opcode(OpCode::Deref {
+                            dst: dst.clone(),
+                            src: node.clone(),
+                        });
                     }
                     _ => unreachable!(),
                 }
+
+                dst
             }
             AstKind::Assign { ref lhs, ref rhs } => {
-                let lhs = self.compile_ast(&lhs, function);
-                let rhs = self.compile_ast(&rhs, function);
+                if let AstKind::Prefix {
+                    oper: Token {
+                        kind: TokenKind::AtSymbol,
+                        ..
+                    },
+                    ref node
+                } = &lhs.kind {
+                    let lhs = self.compile_ast(node, function);
+                    let rhs = self.compile_ast(rhs, function);
 
-                function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
+                    function.add_opcode(OpCode::DerefMov { dst: lhs, src: rhs });
+                } else {
+                    let lhs = self.compile_ast(lhs, function);
+                    let rhs = self.compile_ast(rhs, function);
+
+                    function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
+                }
 
                 Argument::VoidRegister
             }
@@ -400,14 +421,14 @@ impl<'src> Compiler<'src> {
 
                 Argument::VoidRegister
             }
-            AstKind::Call { lhs, arguments } => {
+            AstKind::Call { ref lhs, arguments } => {
                 let dst = if ast.data_type == DataType::Void {
                     Argument::VoidRegister
                 } else {
                     Argument::Register(function.add_register(ast.data_type.clone()))
                 };
 
-                let lhs = self.compile_ast(&lhs, function);
+                let lhs = self.compile_ast(lhs, function);
 
                 let arguments = arguments
                     .iter()

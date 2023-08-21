@@ -48,7 +48,7 @@ pub enum TokenKind<'src> {
 impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
-            Self::Not | Self::Sub => Some(7),
+            Self::Not | Self::Hash | Self::AtSymbol | Self::Sub => Some(7),
             _ => None,
         }
     }

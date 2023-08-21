@@ -169,7 +169,13 @@ impl DataType {
 
                         node_data_type
                     }
-                    TokenKind::Hash => DataType::Ref(Box::new(node_data_type)),
+                    TokenKind::Hash => {
+                        if !node.kind.assignable() {
+                            return Err(TypeError::NotAssignable.into());
+                        }
+
+                        DataType::Ref(Box::new(node_data_type))
+                    }
                     TokenKind::AtSymbol => {
                         let DataType::Ref(ref deref) = node_data_type else {
                             return Err(TypeError::NotAReference.into());

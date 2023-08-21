@@ -47,6 +47,14 @@ pub enum OpCode {
         dst: Argument,
         src: Argument,
     },
+    Deref {
+        dst: Argument,
+        src: Argument,
+    },
+    DerefMov {
+        dst: Argument,
+        src: Argument,
+    },
     SetIfEqual {
         dst: Argument,
         lhs: Argument,
@@ -98,7 +106,7 @@ pub enum OpCode {
         dst: Argument,
         lhs: Argument,
         arguments: Vec<Argument>,
-    },
+    }
 }
 
 #[derive(Debug)]

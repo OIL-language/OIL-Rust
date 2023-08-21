@@ -205,12 +205,30 @@ impl Nasm {
                 writeln!(self.text, "    and {dst_compiled}, 0x1\n    xor {dst_compiled}, 0x1")?;
             }
             OpCode::Ref { dst, src } => {
-                let rax = NasmRegister::Rax.generate(function.argument_data_type(src));
+                let rax = NasmRegister::Rax.generate(function.argument_data_type(dst));
 
+                let src_compiled = self.generate_argument(function, src)?;
                 let dst_compiled = self.generate_argument(function, dst)?;
-                let src_compiled = self.generate_argument(function, dst)?;
 
-                writeln!(self.text, "    lea {rax}, {dst_compiled}\n    mov {src_compiled}, {rax}")?;
+                writeln!(self.text, "    lea {rax}, {src_compiled}\n    mov {dst_compiled}, {rax}")?;
+            }
+            OpCode::Deref { dst, src } => {
+                let rax = NasmRegister::Rax.generate(function.argument_data_type(src));
+                let rbx = NasmRegister::Rbx.generate(function.argument_data_type(dst));
+
+                let src_compiled = self.generate_argument(function, src)?;
+                let dst_compiled = self.generate_argument(function, dst)?;
+
+                writeln!(self.text, "    mov {rax}, {src_compiled}\n    mov {rbx}, [{rax}]\n    mov {dst_compiled}, {rbx}")?;
+            }
+            OpCode::DerefMov { dst, src } => {
+                let rax = NasmRegister::Rax.generate(function.argument_data_type(src));
+                let rbx = NasmRegister::Rbx.generate(function.argument_data_type(dst));
+
+                let src_compiled = self.generate_argument(function, src)?;
+                let dst_compiled = self.generate_argument(function, dst)?;
+
+                writeln!(self.text, "    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    mov [{rax}], {rbx}")?;
             }
             OpCode::SetIfEqual { dst, lhs, rhs } => self.generate_comparison(function, dst, lhs, rhs, "sete")?,
             OpCode::SetIfNotEqual { dst, lhs, rhs } => self.generate_comparison(function, dst, lhs, rhs, "setne")?,
