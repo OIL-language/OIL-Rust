@@ -3,6 +3,7 @@ use std::error::Error;
 pub mod ast;
 pub mod bytecode;
 pub mod compiler;
+pub mod nasm;
 pub mod parser;
 pub mod symbol_table;
 pub mod types;

@@ -48,7 +48,7 @@ pub enum TokenKind<'src> {
 impl<'src> TokenKind<'src> {
     fn prefix_bp(&self) -> Option<usize> {
         match self {
-            Self::Not | Self::Hash | Self::AtSymbol | Self::Sub => Some(7),
+            Self::Not | Self::Sub => Some(7),
             _ => None,
         }
     }
@@ -460,9 +460,13 @@ impl<'src> Parser<'src> {
 
         self.expect_token(TokenKind::RParen)?;
 
-        self.expect_token(TokenKind::Colon)?;
+        let return_type = if self.peeking_token(TokenKind::Colon)? {
+            self.next_token()?;
 
-        let return_type = self.parse_data_type()?;
+            self.parse_data_type()?
+        } else {
+            DataType::Void
+        };
 
         symbol_table.enter_scope(outer_scope_id);
 

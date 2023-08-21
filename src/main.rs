@@ -1,4 +1,10 @@
-use oil::{compiler::Compiler, parser::Parser, CompilerResult};
+use oil::{
+    bytecode::{Argument, OpCode, Function, CodeGenerator},
+    compiler::Compiler,
+    nasm::Nasm,
+    parser::Parser,
+    CompilerResult
+};
 use std::{
     env,
     fs::{self, File},
@@ -16,9 +22,22 @@ fn main() -> CompilerResult<'static, ()> {
 
     let input_file = fs::read_to_string(input_file_path)?;
 
-    let (ast, symbol_table) = Parser::parse(&input_file).map_err(|e| e.to_string())?;
+    let (ast, symbol_table) = Parser::parse(&input_file)
+        .map_err(|e| e.to_string())?;
 
-    let code = Compiler::compile(ast, symbol_table);
+    let mut main = Function::new("@main", ast.data_type.clone(), Vec::new());
+
+    let mut compiler = Compiler::new(symbol_table);
+
+    let data = compiler.compile_ast(&ast, &mut main);
+
+    main.add_opcode(OpCode::Mov { dst: Argument::ReturnValue, src: data });
+
+    let mut bytecode = compiler.bytecode();
+
+    bytecode.add_function(main);
+
+    let code = Nasm::generate(&bytecode)?;
 
     if let Some(output_file_path) = args.next() {
         let mut output_file = File::create(output_file_path)?;

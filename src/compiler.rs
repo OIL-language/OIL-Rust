@@ -5,7 +5,10 @@ use crate::{
     symbol_table::{SymbolTable, VariableID},
     types::DataType,
 };
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+    borrow::Cow,
+    collections::HashMap
+};
 
 pub struct Compiler<'src> {
     symbol_table: SymbolTable<'src>,
@@ -14,29 +17,17 @@ pub struct Compiler<'src> {
 }
 
 impl<'src> Compiler<'src> {
-    pub fn compile(ast: Ast<'src>, symbol_table: SymbolTable<'src>) -> String {
-        let mut compiler = Self {
+    pub fn new(symbol_table: SymbolTable<'src>) -> Self {
+        Self {
             symbol_table,
             bytecode: ByteCode::new(),
-            variable_registers: HashMap::new(),
-        };
-
-        let mut main = Function::new("@main", Vec::new(), ast.data_type.clone());
-
-        let dst = main.return_value();
-
-        let data = compiler.compile_ast(&ast, &mut main);
-
-        main.add_opcode(OpCode::Mov { dst, src: data });
-
-        compiler.bytecode.add_function(main);
-
-        println!("{:#?}", compiler.bytecode);
-
-        compiler.bytecode.compile_nasm()
+            variable_registers: HashMap::new()
+        }
     }
 
-    fn compile_ast(&mut self, ast: &'src Ast<'src>, function: &mut Function<'src>) -> Argument {
+    pub fn bytecode(self) -> ByteCode<'src> { self.bytecode }
+
+    pub fn compile_ast(&mut self, ast: &'src Ast<'src>, function: &mut Function<'src>) -> Argument {
         match &ast.kind {
             AstKind::Node { ref token } => match &token.kind {
                 TokenKind::Number(value) => Argument::Constant {
@@ -45,8 +36,8 @@ impl<'src> Compiler<'src> {
                 },
                 TokenKind::Ident => {
                     let variable_id = self.symbol_table
-                            .get_variable_id(token.text)
-                            .expect("Variable not being predefined was not caught in the typechecking phase, this is a compiler bug");
+                        .get_variable_id(token.text)
+                        .expect("Variable not being predefined was not caught in the typechecking phase, this is a compiler bug");
 
                     self.variable_registers
                         .get(&variable_id)
@@ -88,8 +79,8 @@ impl<'src> Compiler<'src> {
             } => {
                 let dst = Argument::Register(function.add_register(ast.data_type.clone()));
 
-                let lhs = self.compile_ast(lhs, function);
-                let rhs = self.compile_ast(rhs, function);
+                let lhs = self.compile_ast(&lhs, function);
+                let rhs = self.compile_ast(&rhs, function);
 
                 match oper.kind {
                     TokenKind::Add => {
@@ -195,41 +186,39 @@ impl<'src> Compiler<'src> {
                 dst
             }
             AstKind::Prefix { ref oper, ref node } => {
-                let dst = Argument::Register(function.add_register(ast.data_type.clone()));
-
                 let node = self.compile_ast(node, function);
 
                 match oper.kind {
                     TokenKind::Sub => {
+                        let dst = Argument::Register(function.add_register(ast.data_type.clone()));
+
                         function.add_opcode(OpCode::Mov {
                             dst: dst.clone(),
                             src: node.clone(),
                         });
+
                         function.add_opcode(OpCode::Negate { dst: dst.clone() });
+
+                        dst
                     }
                     TokenKind::Not => {
+                        let dst = Argument::Register(function.add_register(ast.data_type.clone()));
+
                         function.add_opcode(OpCode::Mov {
                             dst: dst.clone(),
                             src: node.clone(),
                         });
+
                         function.add_opcode(OpCode::Not { dst: dst.clone() });
+
+                        dst
                     }
-                    TokenKind::Hash => function.add_opcode(OpCode::Ref {
-                        dst: dst.clone(),
-                        src: node.clone(),
-                    }),
-                    TokenKind::AtSymbol => function.add_opcode(OpCode::Deref {
-                        dst: dst.clone(),
-                        src: node.clone(),
-                    }),
                     _ => unreachable!(),
                 }
-
-                dst
             }
             AstKind::Assign { ref lhs, ref rhs } => {
-                let lhs = self.compile_ast(lhs, function);
-                let rhs = self.compile_ast(rhs, function);
+                let lhs = self.compile_ast(&lhs, function);
+                let rhs = self.compile_ast(&rhs, function);
 
                 function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
 
@@ -269,7 +258,7 @@ impl<'src> Compiler<'src> {
                 ref value,
             } => {
                 let variable = if let Some(argument_id) = argument_id {
-                    Argument::Argument(*argument_id + 1)
+                    Argument::Argument(*argument_id)
                 } else {
                     Argument::Register(function.add_register(data_type.clone()))
                 };
@@ -309,7 +298,7 @@ impl<'src> Compiler<'src> {
                     })
                     .collect();
 
-                let mut function = Function::new(name, argument_types, return_type.clone());
+                let mut function = Function::new(name, return_type.clone(), argument_types);
 
                 self.symbol_table.enter_scope(*scope_id);
 
@@ -317,15 +306,10 @@ impl<'src> Compiler<'src> {
                     let _ = self.compile_ast(argument, &mut function);
                 }
 
-                let dst = function.return_value();
-
                 let return_value = self.compile_ast(body, &mut function);
 
                 if *return_type != DataType::Void {
-                    function.add_opcode(OpCode::Mov {
-                        dst,
-                        src: return_value,
-                    });
+                    function.add_opcode(OpCode::Mov { dst: Argument::ReturnValue, src: return_value });
                 }
 
                 self.bytecode.add_function(function);
@@ -423,7 +407,7 @@ impl<'src> Compiler<'src> {
                     Argument::Register(function.add_register(ast.data_type.clone()))
                 };
 
-                let lhs = self.compile_ast(lhs, function);
+                let lhs = self.compile_ast(&lhs, function);
 
                 let arguments = arguments
                     .iter()
