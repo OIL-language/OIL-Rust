@@ -4,18 +4,27 @@ OIL is an imperative programming language designed for simplicity, elegance and 
 ```rust
 import std;
 
-use std.io;
+use std.io.STDOUT;
 
 fn main() {
     Range.new(0, 100)
-         .each(fn (let i: U32) if i % 3 == 0 && i % 5 == 0 {
-             io.println("Fizzbuzz");
-         } else if i % 3 == 0 {
-             io.println("Fizz");
-         } else if i % 5 == 0 {
-             io.println("Buzz");
-         } else {
-             io.println(i);
-         })
-}
+        .each(fn (let i: U32) {
+            let any_conditions: Bool = false;
+
+            [("Fizz", 3), ("Buzz", 5), ("Foo", 2), ("Bar", 13), ("Baz", 19)]
+                .to_iter()
+                .each(fn (let (name, multiple): (String, U64)) {
+                    if i % multiple == 0 {
+                        any_conditions = true;
+                        STDOUT.print(i);
+                    }
+                });
+
+            if !any_conditions {
+                STDOUT.print(i);
+            }
+
+            STDOUT.println();
+        });
+};
 ```
