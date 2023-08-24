@@ -1,7 +1,7 @@
 {
-    let a: U32 = 6;
-    let b: U32 = 5;
-    let c: U32 = 2;
+    let a: U64 = 6;
+    let b: U64 = 5;
+    let c: U64 = 2;
 
-    a * a + b * b + c * c * c
+    a * a + b * b + c * c * c;
 }

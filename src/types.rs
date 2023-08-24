@@ -228,6 +228,18 @@ impl DataType {
                     _ => unreachable!(),
                 }
             }
+            AstKind::Index {
+                ref mut lhs,
+                ref mut index,
+            } => {
+                DataType::Int(IntType::U64).infer(index)?;
+
+                let DataType::Ref(ref deref) = lhs.data_type else {
+                    return Err(TypeError::NotAReference.into());
+                };
+
+                *deref.clone()
+            }
             AstKind::Assign {
                 ref mut lhs,
                 ref mut rhs,

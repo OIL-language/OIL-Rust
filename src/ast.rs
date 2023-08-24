@@ -21,6 +21,10 @@ pub enum AstKind<'src> {
         lhs: Box<Ast<'src>>,
         rhs: Box<Ast<'src>>,
     },
+    Index {
+        lhs: Box<Ast<'src>>,
+        index: Box<Ast<'src>>,
+    },
     Assign {
         lhs: Box<Ast<'src>>,
         rhs: Box<Ast<'src>>,
@@ -72,7 +76,7 @@ impl<'src> AstKind<'src> {
                     ..
                 },
                 ..
-            }
+            } | Self::Index { .. }
         )
     }
 }

@@ -1,4 +1,16 @@
 {
-    print("Hello, World!\n", 14);
+    fn strlen(let text: String): U64 {
+        let i: U64 = 0;
+
+        while text[i] > 0 {
+            i = i + 1;
+        };
+
+        i;
+    };
+
+    let text: String = "Hello, World!\n";
+    print(text, strlen(text));
+
     0;
 }

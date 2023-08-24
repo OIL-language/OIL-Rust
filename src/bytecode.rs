@@ -47,13 +47,15 @@ pub enum OpCode {
         dst: Argument,
         src: Argument,
     },
-    Deref {
+    Index {
         dst: Argument,
         src: Argument,
+        index: Argument
     },
-    DerefMov {
+    SetIndex {
         dst: Argument,
         src: Argument,
+        index: Argument
     },
     SetIfEqual {
         dst: Argument,
@@ -122,7 +124,7 @@ pub struct Function<'src> {
 }
 
 impl<'src> Function<'src> {
-    pub fn new<'a>(name: &'src str, return_type: DataType, argument_types: Vec<DataType>) -> Self {
+    pub fn new(name: &'src str, return_type: DataType, argument_types: Vec<DataType>) -> Self {
         let arguments_size = argument_types
             .iter()
             .map(|data_type| data_type.size_aligned())
@@ -193,7 +195,7 @@ impl<'src> Function<'src> {
 
 #[derive(Debug, Default)]
 pub struct ByteCode<'src> {
-    pub symbols: Vec<(String, &'src [u8])>,
+    pub strings: Vec<&'src str>,
     pub functions: Vec<Function<'src>>,
 }
 
@@ -206,13 +208,12 @@ impl<'src> ByteCode<'src> {
         self.functions.push(function);
     }
 
-    pub fn add_symbol(&mut self, name: String, data: &'src [u8]) {
-        self.symbols.push((name, data));
+    pub fn add_string(&mut self, string: &'src str) -> usize {
+        self.strings.push(string);
+        self.strings.len() - 1
     }
 
-    pub fn symbols_len(&self) -> usize {
-        self.symbols.len()
-    }
+    pub fn string_symbol_name(id: usize) -> String { format!("str_{id}") }
 }
 
 pub trait CodeGenerator<'src> {

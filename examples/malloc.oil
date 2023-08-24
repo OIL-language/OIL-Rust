@@ -1,0 +1,15 @@
+{
+    let size: U64 = 3000000;
+    let data: #U8 = malloc(size);
+
+    let i: U64 = 0;
+    while i < size {
+        data[i] = 65;
+        i = i + 1;
+    };
+
+    print(data, size);
+    free(data, size);
+
+    0;
+}

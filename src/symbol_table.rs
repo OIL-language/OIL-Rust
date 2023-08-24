@@ -115,6 +115,26 @@ impl<'src> Default for SymbolTable<'src> {
             },
         );
 
+        symbol_table.add_variable(
+            "malloc",
+            Variable {
+                data_type: DataType::Function {
+                    return_type: Box::new(DataType::Ref(Box::new(DataType::Int(IntType::U8)))),
+                    argument_types: vec![DataType::Int(IntType::U64)],
+                },
+            },
+        );
+
+        symbol_table.add_variable(
+            "free",
+            Variable {
+                data_type: DataType::Function {
+                    return_type: Box::new(DataType::Void),
+                    argument_types: vec![DataType::Ref(Box::new(DataType::Int(IntType::U8))), DataType::Int(IntType::U64)],
+                },
+            },
+        );
+
         symbol_table
     }
 }

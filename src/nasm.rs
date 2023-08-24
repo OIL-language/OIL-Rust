@@ -69,10 +69,39 @@ impl NasmRegister {
 const PRINT_CODE: &str = "\
 print:
     enter 0, 0
-    mov rax, 1
-    mov rdi, 1
-    mov rsi, [rbp + 24]
-    mov rdx, [rbp + 16]
+    mov rax, 0x1        ; syscall write
+    mov rdi, 0x1        ; stdout
+    mov rsi, [rbp + 24] ; text
+    mov rdx, [rbp + 16] ; length
+    syscall
+    leave
+    ret
+";
+
+const MALLOC_CODE: &str = "\
+malloc:
+    enter 0, 0
+    mov rax, 0x9        ; syscall mmap
+    mov rdi, 0x0        ; addr chosed by kernel
+    mov rsi, [rbp + 16] ; length
+    mov rdx, 0x3        ; PROT_READ | PROT_WRITE
+    mov r10, 0x22       ; MAP_ANONYMOUS | MAP_PRIVATE
+    mov r8, -1          ; no file descriptor
+    mov r9, 0           ; no offset
+    syscall
+    cmp rax, -1    ; MAP_FAILED
+    mov rbx, 0x0   ; null
+    mov qword [rbp + 24], rax
+    leave
+    ret
+";
+
+const FREE_CODE: &str = "\
+free:
+    enter 0, 0
+    mov rax, 0xb        ; syscall munmap
+    mov rdi, [rbp + 24] ; addr
+    mov rsi, [rbp + 16] ; length
     syscall
     leave
     ret
@@ -80,10 +109,10 @@ print:
 
 const ENTRY_CODE: &str = "\
 _start:
-    sub rsp, 8
+    sub rsp, 0x8
     call @main
-    mov rax, 60
-    pop rdi
+    mov rax, 0x3c ; syscall exit
+    pop rdi       ; exit code
     syscall
 ";
 
@@ -92,7 +121,7 @@ pub struct Nasm {
 }
 
 impl Nasm {
-    fn generate_argument<'src, 'a>(&mut self, function: &'a Function<'src>, argument: &Argument) -> Result<String, fmt::Error> {
+    fn generate_argument(&mut self, function: &Function, argument: &Argument) -> Result<String, fmt::Error> {
         let text = match argument {
             Argument::ReturnValue => {
                 format!(
@@ -123,12 +152,12 @@ impl Nasm {
         Ok(text)
     }
 
-    fn generate_infix<'src, 'a>(
+    fn generate_infix(
         &mut self,
-        function: &'a Function<'src>,
+        function: &Function,
         dst: &Argument,
         src: &Argument,
-        operation: &'a str
+        operation: &str
     ) -> fmt::Result {
         let rax = NasmRegister::Rax.generate(function.argument_data_type(dst));
 
@@ -142,13 +171,13 @@ impl Nasm {
         }
     }
 
-    fn generate_comparison<'src, 'a>(
+    fn generate_comparison(
         &mut self,
-        function: &'a Function<'src>,
+        function: &Function,
         dst: &Argument,
         lhs: &Argument,
         rhs: &Argument,
-        operation: &'a str
+        operation: &str
     ) -> fmt::Result {
         assert_eq!(*function.argument_data_type(dst), DataType::Bool);
 
@@ -161,10 +190,10 @@ impl Nasm {
         writeln!(self.text, "    mov {rax}, {lhs_compiled}\n    cmp {rax}, {rhs_compiled}\n    {operation} {dst_compiled}")
     }
 
-    fn generate_opcode<'src, 'a>(
+    fn generate_opcode(
         &mut self,
-        function: &'a Function<'src>,
-        opcode: &'a OpCode
+        function: &Function,
+        opcode: &OpCode
     ) -> fmt::Result {
         match opcode {
             OpCode::Mov { dst, src } if dst != src => self.generate_infix(function, dst, src, "mov")?,
@@ -212,23 +241,46 @@ impl Nasm {
 
                 writeln!(self.text, "    lea {rax}, {src_compiled}\n    mov {dst_compiled}, {rax}")?;
             }
-            OpCode::Deref { dst, src } => {
+            OpCode::Index { dst, src, index } => {
                 let rax = NasmRegister::Rax.generate(function.argument_data_type(src));
                 let rbx = NasmRegister::Rbx.generate(function.argument_data_type(dst));
 
-                let src_compiled = self.generate_argument(function, src)?;
                 let dst_compiled = self.generate_argument(function, dst)?;
+                let src_compiled = self.generate_argument(function, src)?;
 
-                writeln!(self.text, "    mov {rax}, {src_compiled}\n    mov {rbx}, [{rax}]\n    mov {dst_compiled}, {rbx}")?;
+                writeln!(self.text, "    mov {rax}, {src_compiled}")?;
+
+                if *index == Argument::VoidRegister {
+                    writeln!(self.text, "    mov {rbx}, [{rax}]")?;
+                } else {
+                    let rcx = NasmRegister::Rcx.generate(function.argument_data_type(index));
+
+                    let index_compiled = self.generate_argument(function, index)?;
+
+                    writeln!(self.text, "    mov {rcx}, {index_compiled}\n    mov {rbx}, [{rax} + {rcx}]")?;
+                }
+
+                writeln!(self.text, "    mov {dst_compiled}, {rbx}")?;
             }
-            OpCode::DerefMov { dst, src } => {
-                let rax = NasmRegister::Rax.generate(function.argument_data_type(src));
-                let rbx = NasmRegister::Rbx.generate(function.argument_data_type(dst));
+            OpCode::SetIndex { dst, src, index } => {
+                let rax = NasmRegister::Rax.generate(function.argument_data_type(dst));
+                let rbx = NasmRegister::Rbx.generate(function.argument_data_type(src));
 
-                let src_compiled = self.generate_argument(function, src)?;
                 let dst_compiled = self.generate_argument(function, dst)?;
+                let src_compiled = self.generate_argument(function, src)?;
 
-                writeln!(self.text, "    mov {rax}, {dst_compiled}\n    mov {rbx}, {src_compiled}\n    mov [{rax}], {rbx}")?;
+                writeln!(self.text, "    mov {rax}, {dst_compiled}")?;
+                writeln!(self.text, "    mov {rbx}, {src_compiled}")?;
+
+                if *index == Argument::VoidRegister {
+                    writeln!(self.text, "    mov [{rax}], {rbx}")?;
+                } else {
+                    let rcx = NasmRegister::Rcx.generate(function.argument_data_type(index));
+
+                    let index_compiled = self.generate_argument(function, index)?;
+
+                    writeln!(self.text, "    mov {rcx}, {index_compiled}\n    mov [{rax} + {rcx}], {rbx}")?;
+                }
             }
             OpCode::SetIfEqual { dst, lhs, rhs } => self.generate_comparison(function, dst, lhs, rhs, "sete")?,
             OpCode::SetIfNotEqual { dst, lhs, rhs } => self.generate_comparison(function, dst, lhs, rhs, "setne")?,
@@ -308,7 +360,7 @@ impl Nasm {
                 writeln!(self.text, "    add rsp, {argument_stack_size}")?;
 
                 if let Some(dst_compiled) = dst_compiled {
-                    writeln!(self.text, "pop {dst_compiled}")?;
+                    writeln!(self.text, "    pop {dst_compiled}")?;
                 }
             },
             _ => {}
@@ -317,7 +369,7 @@ impl Nasm {
         Ok(())
     }
 
-    fn generate_function<'src, 'a>(&mut self, function: &'a Function<'src>) -> fmt::Result {
+    fn generate_function(&mut self, function: &Function) -> fmt::Result {
         writeln!(self.text, "{}:\n    enter {}, 0", function.name, function.stack_size())?;
 
         for opcode in &function.opcodes {
@@ -329,22 +381,21 @@ impl Nasm {
         Ok(())
     }
 
-    fn generate_symbol<'src>(&mut self, (name, bytes): &(String, &'src [u8])) -> fmt::Result {
-        let bytes = bytes.iter()
+    fn generate_string_data_decl(&mut self, id: usize, string: &str) -> fmt::Result {
+        let bytes = string.bytes()
+            .chain(std::iter::once(0))
             .map(|byte| byte.to_string())
             .collect::<Vec<String>>()
             .join(", ");
 
-        writeln!(self.text, "{name}: db {bytes}")?;
-
-        Ok(())
+        writeln!(self.text, "{}: db {bytes}", ByteCode::string_symbol_name(id))
     }
 }
 
 impl<'src> CodeGenerator<'src> for Nasm {
     fn generate(bytecode: &ByteCode<'src>) -> Result<String, fmt::Error> {
         let mut nasm = Self {
-            text: format!("[BITS 64]\nglobal _start\nsection .text\n{PRINT_CODE}{ENTRY_CODE}")
+            text: format!("[BITS 64]\nglobal _start\nsection .text\n{MALLOC_CODE}{FREE_CODE}{PRINT_CODE}{ENTRY_CODE}")
         };
 
         for function in &bytecode.functions {
@@ -353,8 +404,8 @@ impl<'src> CodeGenerator<'src> for Nasm {
 
         writeln!(nasm.text, "section .data")?;
 
-        for symbol in &bytecode.symbols {
-            nasm.generate_symbol(symbol)?;
+        for (n, string) in bytecode.strings.iter().enumerate() {
+            nasm.generate_string_data_decl(n, string)?;
         }
 
         Ok(nasm.text)

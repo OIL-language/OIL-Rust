@@ -5,10 +5,7 @@ use crate::{
     symbol_table::{SymbolTable, VariableID},
     types::DataType,
 };
-use std::{
-    borrow::Cow,
-    collections::HashMap
-};
+use std::collections::HashMap;
 
 pub struct Compiler<'src> {
     symbol_table: SymbolTable<'src>,
@@ -48,17 +45,8 @@ impl<'src> Compiler<'src> {
                         })
                 }
                 TokenKind::Str(text) => {
-                    let text = match &text {
-                        Cow::Owned(owned) => owned.as_bytes(),
-                        Cow::Borrowed(borrowed) => borrowed.as_bytes(),
-                    };
-
-                    let name = format!("str_{}", self.bytecode.symbols_len());
-
-                    self.bytecode.add_symbol(name.clone(), text);
-
                     Argument::Symbol {
-                        name,
+                        name: ByteCode::string_symbol_name(self.bytecode.add_string(text)),
                         data_type: ast.data_type.clone(),
                     }
                 }
@@ -185,6 +173,20 @@ impl<'src> Compiler<'src> {
 
                 dst
             }
+            AstKind::Index { ref lhs, ref index } => {
+                let dst = Argument::Register(function.add_register(ast.data_type.clone()));
+
+                let index = self.compile_ast(index, function);
+                let lhs = self.compile_ast(lhs, function);
+
+                function.add_opcode(OpCode::Index {
+                    dst: dst.clone(),
+                    src: lhs,
+                    index: index
+                });
+
+                dst
+            }
             AstKind::Prefix { ref oper, ref node } => {
                 let dst = Argument::Register(function.add_register(ast.data_type.clone()));
 
@@ -214,9 +216,10 @@ impl<'src> Compiler<'src> {
                         });
                     }
                     TokenKind::AtSymbol => {
-                        function.add_opcode(OpCode::Deref {
+                        function.add_opcode(OpCode::Index {
                             dst: dst.clone(),
                             src: node.clone(),
+                            index: Argument::VoidRegister
                         });
                     }
                     _ => unreachable!(),
@@ -225,22 +228,35 @@ impl<'src> Compiler<'src> {
                 dst
             }
             AstKind::Assign { ref lhs, ref rhs } => {
-                if let AstKind::Prefix {
-                    oper: Token {
-                        kind: TokenKind::AtSymbol,
-                        ..
-                    },
-                    ref node
-                } = &lhs.kind {
-                    let lhs = self.compile_ast(node, function);
-                    let rhs = self.compile_ast(rhs, function);
+                match &lhs.kind {
+                    AstKind::Prefix {
+                        oper: Token {
+                            kind: TokenKind::AtSymbol,
+                            ..
+                        },
+                        ref node
+                    } => {
+                        let lhs = self.compile_ast(node, function);
+                        let rhs = self.compile_ast(rhs, function);
 
-                    function.add_opcode(OpCode::DerefMov { dst: lhs, src: rhs });
-                } else {
-                    let lhs = self.compile_ast(lhs, function);
-                    let rhs = self.compile_ast(rhs, function);
+                        function.add_opcode(OpCode::SetIndex { dst: lhs, src: rhs, index: Argument::VoidRegister });
+                    }
+                    AstKind::Index {
+                        ref lhs,
+                        ref index
+                    } => {
+                        let lhs = self.compile_ast(lhs, function);
+                        let index = self.compile_ast(index, function);
+                        let rhs = self.compile_ast(rhs, function);
 
-                    function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
+                        function.add_opcode(OpCode::SetIndex { dst: lhs, src: rhs, index });
+                    }
+                    _ => {
+                        let lhs = self.compile_ast(lhs, function);
+                        let rhs = self.compile_ast(rhs, function);
+
+                        function.add_opcode(OpCode::Mov { dst: lhs, src: rhs });
+                    }
                 }
 
                 Argument::VoidRegister

@@ -708,39 +708,39 @@ impl<'src> Parser<'src> {
         };
 
         while let Some(oper) = self.peek_token()? {
-            if oper.kind == TokenKind::LParen {
-                let arguments = self.parse_function_call_args(symbol_table)?;
+            let ast_kind = match oper.kind {
+                TokenKind::LParen => {
+                    let arguments = self.parse_function_call_args(symbol_table)?;
 
-                lhs = Ast::new(
-                    symbol_table,
-                    AstKind::Call {
-                        lhs: Box::new(lhs),
-                        arguments,
-                    },
-                )?;
-                continue;
-            }
+                    AstKind::Call { lhs: Box::new(lhs), arguments }
+                }
+                TokenKind::LSquare => {
+                    self.next_token()?;
 
-            let Some((infix_left_bp, infix_right_bp)) = oper.kind.infix_bp() else {
-                break;
+                    let index = self.parse_expr_bp(symbol_table, 0)?;
+
+                    self.expect_token(TokenKind::RSquare)?;
+
+                    AstKind::Index { lhs: Box::new(lhs), index: Box::new(index) }
+                }
+                _ => {
+                    let Some((infix_left_bp, infix_right_bp)) = oper.kind.infix_bp() else {
+                        break;
+                    };
+
+                    if infix_left_bp < min_bp {
+                        break;
+                    };
+
+                    self.next_token()?;
+
+                    let rhs = self.parse_expr_bp(symbol_table, infix_right_bp)?;
+
+                    AstKind::Infix { oper, lhs: Box::new(lhs), rhs: Box::new(rhs) }
+                }
             };
 
-            if infix_left_bp < min_bp {
-                break;
-            };
-
-            self.next_token()?;
-
-            let rhs = self.parse_expr_bp(symbol_table, infix_right_bp)?;
-
-            lhs = Ast::new(
-                symbol_table,
-                AstKind::Infix {
-                    oper,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-            )?;
+            lhs = Ast::new(symbol_table, ast_kind)?;
         }
 
         Ok(lhs)
