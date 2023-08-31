@@ -1,22 +1,34 @@
 use crate::{
-    ast::{Ast, AstKind},
+    ast::{Ast, AstKind, VariableDeclaration},
     div_round_up,
     parser::TokenKind,
-    symbol_table::SymbolTable,
+    symbol_table::{Symbol, SymbolTable},
     CompilerResult,
 };
 use std::{cmp::Eq, error::Error, fmt};
 
 pub enum TypeError<'src> {
-    TypeMismatch { first: DataType, second: DataType },
-    ExpectedType { expected: DataType, found: DataType },
+    TypeMismatch {
+        first: DataType<'src>,
+        second: DataType<'src>,
+    },
+    ExpectedType {
+        expected: DataType<'src>,
+        found: DataType<'src>,
+    },
     NotANumber,
     NotSigned,
     NotAssignable,
     NotAFunction,
     NotAReference,
+    NotAStruct,
     WrongNumberOfArguments,
-    NotDefined { name: &'src str },
+    NotDefined {
+        name: &'src str,
+    },
+    FieldNotDefined {
+        name: &'src str,
+    },
     CannotInfer,
 }
 
@@ -36,10 +48,12 @@ impl fmt::Debug for TypeError<'_> {
             Self::NotAssignable => write!(f, "you can't assign to this expression"),
             Self::NotAFunction => write!(f, "this expression isn't a function"),
             Self::NotAReference => write!(f, "this expression isn't a reference"),
+            Self::NotAStruct => write!(f, "this expression isn't a struct"),
             Self::WrongNumberOfArguments => {
                 write!(f, "wrong number of arguments passed into function")
             }
             Self::NotDefined { name } => write!(f, "variable `{name}` was not defined"),
+            Self::FieldNotDefined { name } => write!(f, "structure has no defined field `{name}`"),
             Self::CannotInfer => write!(f, "cannot infer type of expression"),
         }
     }
@@ -111,33 +125,36 @@ impl fmt::Debug for IntType {
 }
 
 #[derive(PartialEq, Eq, Clone)]
-pub enum DataType {
+pub enum DataType<'src> {
     Void,
     Bool,
     Inferred(InferredType),
     Int(IntType),
     Ref(Box<Self>),
+    Struct(Vec<(&'src str, Self)>),
     Function {
         return_type: Box<Self>,
         argument_types: Vec<Self>,
     },
 }
 
-impl DataType {
-    pub fn new<'src>(
+impl<'src> DataType<'src> {
+    pub fn new(
         symbol_table: &mut SymbolTable<'src>,
         kind: &mut AstKind<'src>,
     ) -> CompilerResult<'src, Self> {
         let data_type = match kind {
             AstKind::Node { ref token } => match token.kind {
-                TokenKind::Number(_) => DataType::Inferred(InferredType::Int),
-                TokenKind::Ident => symbol_table
-                    .get_variable(token.text)
-                    .ok_or(TypeError::NotDefined { name: token.text })?
-                    .data_type
-                    .clone(),
-                TokenKind::Str(_) => DataType::Ref(Box::new(DataType::Int(IntType::U8))),
-                TokenKind::True | TokenKind::False => DataType::Bool,
+                TokenKind::Number(_) => Self::Inferred(InferredType::Int),
+                TokenKind::Ident => {
+                    let Some(Symbol::Variable(ref data_type)) = symbol_table.get_symbol(token.text) else {
+                        return Err(TypeError::NotDefined { name: token.text }.into());
+                    };
+
+                    data_type.clone()
+                }
+                TokenKind::Str(_) => Self::Ref(Box::new(Self::Int(IntType::U8))),
+                TokenKind::True | TokenKind::False => Self::Bool,
                 _ => unreachable!(),
             },
             AstKind::Prefix {
@@ -148,20 +165,20 @@ impl DataType {
 
                 match oper.kind {
                     TokenKind::Sub => match node_data_type {
-                        DataType::Int(int_type) => {
+                        Self::Int(int_type) => {
                             if !int_type.is_signed() {
                                 return Err(TypeError::NotSigned.into());
                             }
 
                             node_data_type
                         }
-                        DataType::Inferred(InferredType::Int) => node_data_type,
+                        Self::Inferred(InferredType::Int) => node_data_type,
                         _ => return Err(TypeError::NotANumber.into()),
                     },
                     TokenKind::Not => {
-                        if node_data_type != DataType::Bool {
+                        if node_data_type != Self::Bool {
                             return Err(TypeError::ExpectedType {
-                                expected: DataType::Bool,
+                                expected: Self::Bool,
                                 found: node_data_type,
                             }
                             .into());
@@ -174,10 +191,10 @@ impl DataType {
                             return Err(TypeError::NotAssignable.into());
                         }
 
-                        DataType::Ref(Box::new(node_data_type))
+                        Self::Ref(Box::new(node_data_type))
                     }
                     TokenKind::AtSymbol => {
-                        let DataType::Ref(ref deref) = node_data_type else {
+                        let Self::Ref(ref deref) = node_data_type else {
                             return Err(TypeError::NotAReference.into());
                         };
 
@@ -214,7 +231,7 @@ impl DataType {
 
                         lhs.data_type.clone()
                     }
-                    TokenKind::Equals | TokenKind::NotEquals => DataType::Bool,
+                    TokenKind::Equals | TokenKind::NotEquals => Self::Bool,
                     TokenKind::Greater
                     | TokenKind::Less
                     | TokenKind::GreaterOrEqual
@@ -223,7 +240,7 @@ impl DataType {
                             return Err(TypeError::NotANumber.into());
                         };
 
-                        DataType::Bool
+                        Self::Bool
                     }
                     _ => unreachable!(),
                 }
@@ -232,9 +249,9 @@ impl DataType {
                 ref mut lhs,
                 ref mut index,
             } => {
-                DataType::Int(IntType::U64).infer(index)?;
+                Self::Int(IntType::U64).infer(index)?;
 
-                let DataType::Ref(ref deref) = lhs.data_type else {
+                let Self::Ref(ref deref) = lhs.data_type else {
                     return Err(TypeError::NotAReference.into());
                 };
 
@@ -259,7 +276,22 @@ impl DataType {
                     return Err(TypeError::NotAssignable.into());
                 }
 
-                DataType::Void
+                Self::Void
+            }
+            AstKind::GetField {
+                ref mut lhs,
+                ref name,
+            } => {
+                let Self::Struct(ref fields) = lhs.data_type else {
+                    return Err(TypeError::NotAStruct.into());
+                };
+
+                let (_, data_type) = fields
+                    .iter()
+                    .find(|(field_name, _)| field_name == name)
+                    .ok_or(TypeError::FieldNotDefined { name })?;
+
+                data_type.clone()
             }
             AstKind::Block {
                 ref mut statements, ..
@@ -268,24 +300,24 @@ impl DataType {
 
                 for (n, statement) in statements.iter_mut().enumerate() {
                     if n + 1 < length {
-                        DataType::Void.infer(statement)?;
+                        Self::Void.infer(statement)?;
                     }
                 }
 
                 statements
                     .last()
-                    .map_or(DataType::Void, |statement| statement.data_type.clone())
+                    .map_or(Self::Void, |statement| statement.data_type.clone())
             }
-            AstKind::Declaration {
+            AstKind::VariableDeclaration(VariableDeclaration {
                 ref data_type,
                 ref mut value,
                 ..
-            } => {
+            }) => {
                 if let Some(ref mut value) = value {
                     data_type.infer(value)?;
                 }
 
-                DataType::Void
+                Self::Void
             }
             AstKind::FunctionDeclaration {
                 ref return_type,
@@ -294,14 +326,15 @@ impl DataType {
             } => {
                 return_type.infer(body)?;
 
-                DataType::Void
+                Self::Void
             }
+            AstKind::StructDeclaration { .. } => Self::Void,
             AstKind::IfStatement {
                 ref mut condition,
                 ref mut if_block,
                 ref mut else_block,
             } => {
-                DataType::Bool.infer(condition)?;
+                Self::Bool.infer(condition)?;
 
                 if let Some(ref mut else_block) = else_block {
                     else_block.data_type.infer(if_block)?;
@@ -315,7 +348,7 @@ impl DataType {
                         .into());
                     }
                 } else {
-                    DataType::Void.infer(if_block)?;
+                    Self::Void.infer(if_block)?;
                 }
 
                 if_block.data_type.clone()
@@ -324,7 +357,7 @@ impl DataType {
                 ref mut lhs,
                 ref mut arguments,
             } => {
-                let DataType::Function { ref return_type, ref argument_types } = &lhs.data_type else {
+                let Self::Function { ref return_type, ref argument_types } = &lhs.data_type else {
                     return Err(TypeError::NotAFunction.into());
                 };
 
@@ -342,9 +375,9 @@ impl DataType {
                 ref mut condition,
                 ref mut body,
             } => {
-                DataType::Bool.infer(condition)?;
+                Self::Bool.infer(condition)?;
 
-                DataType::Void.infer(body)?;
+                Self::Void.infer(body)?;
 
                 body.data_type.clone()
             }
@@ -353,9 +386,9 @@ impl DataType {
         Ok(data_type)
     }
 
-    pub fn infer<'src>(&self, ast: &mut Ast<'src>) -> CompilerResult<'src, ()> {
-        let DataType::Inferred(ast_inferred_type) = ast.data_type else {
-            if let DataType::Inferred(_) = self {
+    pub fn infer(&self, ast: &mut Ast<'src>) -> CompilerResult<'src, ()> {
+        let Self::Inferred(ast_inferred_type) = ast.data_type else {
+            if let Self::Inferred(_) = self {
                 return Ok(());
             }
 
@@ -375,7 +408,7 @@ impl DataType {
         if ast_inferred_type == InferredType::Int && !self.is_integer() {
             return Err(TypeError::ExpectedType {
                 expected: self.clone(),
-                found: DataType::Inferred(ast_inferred_type),
+                found: Self::Inferred(ast_inferred_type),
             }
             .into());
         }
@@ -387,7 +420,7 @@ impl DataType {
             } => match oper.kind {
                 TokenKind::Sub | TokenKind::Not => self.infer(node)?,
                 TokenKind::Hash => {
-                    let DataType::Ref(ref deref) = self else {
+                    let Self::Ref(ref deref) = self else {
                             return Err(TypeError::ExpectedType {
                                 expected: self.clone(),
                                 found: ast.data_type.clone()
@@ -396,7 +429,7 @@ impl DataType {
 
                     deref.infer(node)?;
                 }
-                TokenKind::AtSymbol => DataType::Ref(Box::new(self.clone())).infer(node)?,
+                TokenKind::AtSymbol => Self::Ref(Box::new(self.clone())).infer(node)?,
                 _ => unreachable!(),
             },
             AstKind::Infix {
@@ -418,9 +451,9 @@ impl DataType {
                 | TokenKind::Greater
                 | TokenKind::LessOrEqual
                 | TokenKind::GreaterOrEqual => {
-                    if *self != DataType::Bool {
+                    if *self != Self::Bool {
                         return Err(TypeError::ExpectedType {
-                            expected: DataType::Bool,
+                            expected: Self::Bool,
                             found: self.clone(),
                         }
                         .into());
@@ -473,16 +506,21 @@ impl DataType {
             Self::Bool => 1,
             Self::Int(int_type) => int_type.size(),
             Self::Ref(_) | Self::Function { .. } => 8,
+            Self::Struct(ref fields) => fields
+                .iter()
+                .map(|(_, data_type)| data_type.size_aligned())
+                .sum(),
             _ => unreachable!(),
         }
     }
 
+    #[inline(always)]
     pub fn size_aligned(&self) -> usize {
         div_round_up(self.size(), 8) * 8
     }
 }
 
-impl fmt::Debug for DataType {
+impl<'src> fmt::Debug for DataType<'src> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Void => write!(f, "Void"),
@@ -490,6 +528,16 @@ impl fmt::Debug for DataType {
             Self::Inferred(inferred) => write!(f, "{inferred:?}"),
             Self::Int(int) => write!(f, "{int:?}"),
             Self::Ref(deref) => write!(f, "#{deref:?}"),
+            Self::Struct(fields) => {
+                write!(
+                    f,
+                    "Struct {{ {}}}",
+                    fields
+                        .iter()
+                        .map(|(name, data_type)| format!("let {name}: {data_type:?}; "))
+                        .collect::<String>()
+                )
+            }
             Self::Function {
                 return_type,
                 argument_types,

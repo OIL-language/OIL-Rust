@@ -1,0 +1,263 @@
+    Finished dev [unoptimized + debuginfo] target(s) in 0.00s
+     Running `target/debug/oil ./examples/struct.oil`
+ByteCode {
+    strings: [
+        "Hello, World!\n",
+    ],
+    functions: [
+        Function {
+            name: "strlen",
+            labels: 2,
+            return_type: U64,
+            argument_types: [
+                #U8,
+            ],
+            arguments_size: 8,
+            register_types: [
+                U64,
+                U64,
+                Bool,
+                U8,
+                U64,
+            ],
+            registers_size: 40,
+            opcodes: [
+                Mov {
+                    dst: Register(
+                        1,
+                    ),
+                    src: Constant {
+                        value: 0,
+                        data_type: U64,
+                    },
+                },
+                Label {
+                    label_id: 0,
+                },
+                Index {
+                    dst: Register(
+                        3,
+                    ),
+                    src: Argument(
+                        0,
+                    ),
+                    index: Register(
+                        1,
+                    ),
+                },
+                SetIfGreater {
+                    dst: Register(
+                        2,
+                    ),
+                    lhs: Register(
+                        3,
+                    ),
+                    rhs: Constant {
+                        value: 0,
+                        data_type: U8,
+                    },
+                },
+                GotoIfZero {
+                    condition: Register(
+                        2,
+                    ),
+                    label_id: 1,
+                },
+                Mov {
+                    dst: Register(
+                        4,
+                    ),
+                    src: Register(
+                        1,
+                    ),
+                },
+                Add {
+                    dst: Register(
+                        4,
+                    ),
+                    src: Constant {
+                        value: 1,
+                        data_type: U64,
+                    },
+                },
+                Mov {
+                    dst: Register(
+                        1,
+                    ),
+                    src: Register(
+                        4,
+                    ),
+                },
+                Goto {
+                    label_id: 0,
+                },
+                Label {
+                    label_id: 1,
+                },
+                Mov {
+                    dst: Register(
+                        0,
+                    ),
+                    src: Register(
+                        1,
+                    ),
+                },
+                Mov {
+                    dst: ReturnValue,
+                    src: Register(
+                        0,
+                    ),
+                },
+            ],
+        },
+        Function {
+            name: "Text_from",
+            labels: 0,
+            return_type: Void,
+            argument_types: [
+                #U8,
+                #Struct {let text: #U8; let size: U64; },
+            ],
+            arguments_size: 16,
+            register_types: [
+                Struct {let text: #U8; let size: U64; },
+                Struct {let text: #U8; let size: U64; },
+                U64,
+            ],
+            registers_size: 40,
+            opcodes: [
+                Index {
+                    dst: Register(
+                        0,
+                    ),
+                    src: Argument(
+                        1,
+                    ),
+                    index: VoidRegister,
+                },
+                Mov {
+                    dst: StructField {
+                        data: Register(
+                            0,
+                        ),
+                        name: "text",
+                    },
+                    src: Argument(
+                        0,
+                    ),
+                },
+                Index {
+                    dst: Register(
+                        1,
+                    ),
+                    src: Argument(
+                        1,
+                    ),
+                    index: VoidRegister,
+                },
+                Call {
+                    dst: Register(
+                        2,
+                    ),
+                    lhs: Symbol {
+                        name: "strlen",
+                        data_type: Fn (#U8) -> U64,
+                    },
+                    arguments: [
+                        Argument(
+                            0,
+                        ),
+                    ],
+                },
+                Mov {
+                    dst: StructField {
+                        data: Register(
+                            1,
+                        ),
+                        name: "size",
+                    },
+                    src: Register(
+                        2,
+                    ),
+                },
+            ],
+        },
+        Function {
+            name: "@main",
+            labels: 0,
+            return_type: U64,
+            argument_types: [],
+            arguments_size: 0,
+            register_types: [
+                U64,
+                Struct {let text: #U8; let size: U64; },
+                #Struct {let text: #U8; let size: U64; },
+            ],
+            registers_size: 32,
+            opcodes: [
+                Ref {
+                    dst: Register(
+                        2,
+                    ),
+                    src: Register(
+                        1,
+                    ),
+                },
+                Call {
+                    dst: VoidRegister,
+                    lhs: Symbol {
+                        name: "Text_from",
+                        data_type: Fn (#U8, #Struct {let text: #U8; let size: U64; }) -> Void,
+                    },
+                    arguments: [
+                        Register(
+                            2,
+                        ),
+                        Symbol {
+                            name: "str_0",
+                            data_type: #U8,
+                        },
+                    ],
+                },
+                Call {
+                    dst: VoidRegister,
+                    lhs: Symbol {
+                        name: "print",
+                        data_type: Fn (#U8, U64) -> Void,
+                    },
+                    arguments: [
+                        StructField {
+                            data: Register(
+                                1,
+                            ),
+                            name: "size",
+                        },
+                        StructField {
+                            data: Register(
+                                1,
+                            ),
+                            name: "text",
+                        },
+                    ],
+                },
+                Mov {
+                    dst: Register(
+                        0,
+                    ),
+                    src: Constant {
+                        value: 101,
+                        data_type: U64,
+                    },
+                },
+                Mov {
+                    dst: ReturnValue,
+                    src: Register(
+                        0,
+                    ),
+                },
+            ],
+        },
+    ],
+}
+thread 'main' panicked at 'internal error: entered unreachable code', src/nasm.rs:58:18
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,9 +1,6 @@
 use oil::{
-    bytecode::{Argument, OpCode, Function, CodeGenerator},
-    compiler::Compiler,
-    nasm::Nasm,
-    parser::Parser,
-    CompilerResult
+    bytecode::CodeGenerator, compiler::Compiler, nasm::Nasm, parser::Parser,
+    symbol_table::SymbolTable, CompilerResult,
 };
 use std::{
     env,
@@ -14,7 +11,7 @@ use std::{
 fn main() -> CompilerResult<'static, ()> {
     let mut args = env::args();
 
-    assert!(args.next().is_some());
+    assert!(args.next().is_some()); // executable
 
     let Some(input_file_path) = args.next() else {
         return Err("Not enough arguments provided.".into());
@@ -22,20 +19,13 @@ fn main() -> CompilerResult<'static, ()> {
 
     let input_file = fs::read_to_string(input_file_path)?;
 
-    let (ast, symbol_table) = Parser::parse(&input_file)
-        .map_err(|e| e.to_string())?;
+    let mut symbol_table = SymbolTable::new();
 
-    let mut main = Function::new("@main", ast.data_type.clone(), Vec::new());
+    let ast = Parser::parse(&input_file, &mut symbol_table).map_err(|e| e.to_string())?;
 
-    let mut compiler = Compiler::new(symbol_table);
+    let bytecode = Compiler::compile(&ast, symbol_table);
 
-    let data = compiler.compile_ast(&ast, &mut main);
-
-    main.add_opcode(OpCode::Mov { dst: Argument::ReturnValue, src: data });
-
-    let mut bytecode = compiler.bytecode();
-
-    bytecode.add_function(main);
+    eprintln!("{bytecode:#?}");
 
     let code = Nasm::generate(&bytecode)?;
 

@@ -2,20 +2,28 @@ use crate::types::{DataType, IntType};
 use std::collections::HashMap;
 
 #[derive(Hash, PartialEq, Eq)]
-pub struct VariableID<'src> {
+pub struct SymbolID<'src> {
     name: &'src str,
     scope_id: ScopeID,
 }
 
 pub type ScopeID = usize;
 
-pub struct Variable {
-    pub data_type: DataType,
+pub enum Symbol<'src> {
+    Variable(DataType<'src>),
+    Struct(DataType<'src>),
 }
 
+// Symbol Table:
+//
+// In order to find a symbol with a given name, the table searches through every scope starting with the first one going backwards.
+// To achieve this, every scope has a mapping to the previous scope, going back to the first scope, which maps recursively to itself.
+// If the table cannot find your symbol in the first scope, the global scope,
+// then it cannot find your symbol in any scope, and throws a runtime error.
+// Every symbol in the hashmap contains both its name, and the ID number of its scope.
 pub struct SymbolTable<'src> {
     pub scope_id: ScopeID,
-    variables: HashMap<VariableID<'src>, Variable>,
+    symbols: HashMap<SymbolID<'src>, Symbol<'src>>,
     pub scopes: Vec<ScopeID>,
 }
 
@@ -24,22 +32,22 @@ impl<'src> SymbolTable<'src> {
         Self::default()
     }
 
-    pub fn add_variable(&mut self, name: &'src str, variable: Variable) {
-        self.variables.insert(
-            VariableID {
+    pub fn add_symbol(&mut self, name: &'src str, symbol: Symbol<'src>) {
+        self.symbols.insert(
+            SymbolID {
                 name,
                 scope_id: self.scope_id,
             },
-            variable,
+            symbol,
         );
     }
 
-    pub fn get_variable(&self, name: &'src str) -> Option<&Variable> {
+    pub fn get_symbol(&self, name: &'src str) -> Option<&Symbol<'src>> {
         let mut scope_id = self.scope_id;
 
         loop {
-            if let Some(variable) = self.variables.get(&VariableID { name, scope_id }) {
-                return Some(variable);
+            if let Some(symbol) = self.symbols.get(&SymbolID { name, scope_id }) {
+                return Some(symbol);
             }
 
             if scope_id == 0 {
@@ -52,13 +60,13 @@ impl<'src> SymbolTable<'src> {
         None
     }
 
-    pub fn get_variable_id(&self, name: &'src str) -> Option<VariableID<'src>> {
+    pub fn get_symbol_id(&self, name: &'src str) -> Option<SymbolID<'src>> {
         let mut scope_id = self.scope_id;
 
         loop {
-            let variable_id = VariableID { name, scope_id };
-            if self.variables.get(&variable_id).is_some() {
-                return Some(variable_id);
+            let symbol_id = SymbolID { name, scope_id };
+            if self.symbols.get(&symbol_id).is_some() {
+                return Some(symbol_id);
             }
 
             if scope_id == 0 {
@@ -98,41 +106,38 @@ impl<'src> Default for SymbolTable<'src> {
     fn default() -> Self {
         let mut symbol_table = Self {
             scope_id: 0,
-            variables: HashMap::new(),
+            symbols: HashMap::new(),
             scopes: vec![0],
         };
 
-        symbol_table.add_variable(
+        symbol_table.add_symbol(
             "print",
-            Variable {
-                data_type: DataType::Function {
-                    return_type: Box::new(DataType::Void),
-                    argument_types: vec![
-                        DataType::Ref(Box::new(DataType::Int(IntType::U8))),
-                        DataType::Int(IntType::U64),
-                    ],
-                },
-            },
+            Symbol::Variable(DataType::Function {
+                return_type: Box::new(DataType::Void),
+                argument_types: vec![
+                    DataType::Ref(Box::new(DataType::Int(IntType::U8))),
+                    DataType::Int(IntType::U64),
+                ],
+            }),
         );
 
-        symbol_table.add_variable(
+        symbol_table.add_symbol(
             "malloc",
-            Variable {
-                data_type: DataType::Function {
-                    return_type: Box::new(DataType::Ref(Box::new(DataType::Int(IntType::U8)))),
-                    argument_types: vec![DataType::Int(IntType::U64)],
-                },
-            },
+            Symbol::Variable(DataType::Function {
+                return_type: Box::new(DataType::Ref(Box::new(DataType::Int(IntType::U8)))),
+                argument_types: vec![DataType::Int(IntType::U64)],
+            }),
         );
 
-        symbol_table.add_variable(
+        symbol_table.add_symbol(
             "free",
-            Variable {
-                data_type: DataType::Function {
-                    return_type: Box::new(DataType::Void),
-                    argument_types: vec![DataType::Ref(Box::new(DataType::Int(IntType::U8))), DataType::Int(IntType::U64)],
-                },
-            },
+            Symbol::Variable(DataType::Function {
+                return_type: Box::new(DataType::Void),
+                argument_types: vec![
+                    DataType::Ref(Box::new(DataType::Int(IntType::U8))),
+                    DataType::Int(IntType::U64),
+                ],
+            }),
         );
 
         symbol_table

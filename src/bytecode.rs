@@ -2,93 +2,110 @@ use crate::types::DataType;
 use std::fmt;
 
 pub type RegisterID = usize;
+pub type ArgumentID = usize;
 pub type LabelID = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Argument {
+pub enum Argument<'src> {
     ReturnValue,
     Register(RegisterID),
-    Argument(RegisterID),
-    Constant { value: u64, data_type: DataType },
-    Symbol { name: String, data_type: DataType },
+    Argument(ArgumentID),
+    Deref(Box<Self>),
+    StructField {
+        data: Box<Self>,
+        name: &'src str,
+    },
+    Constant {
+        value: u64,
+        data_type: DataType<'src>,
+    },
+    Symbol {
+        name: String,
+        data_type: DataType<'src>,
+    },
     VoidRegister,
 }
 
 #[derive(Debug, Clone)]
-pub enum OpCode {
+pub enum OpCode<'src> {
     Mov {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Add {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Sub {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Mul {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Div {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Mod {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Not {
-        dst: Argument,
+        dst: Argument<'src>,
     },
     Ref {
-        dst: Argument,
-        src: Argument,
+        dst: Argument<'src>,
+        src: Argument<'src>,
     },
     Index {
-        dst: Argument,
-        src: Argument,
-        index: Argument
+        dst: Argument<'src>,
+        src: Argument<'src>,
+        index: Argument<'src>,
     },
     SetIndex {
-        dst: Argument,
-        src: Argument,
-        index: Argument
+        dst: Argument<'src>,
+        src: Argument<'src>,
+        index: Argument<'src>,
+    },
+    SetField {
+        dst: Argument<'src>,
+        src: Argument<'src>,
+        offset: usize,
     },
     SetIfEqual {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     SetIfNotEqual {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     SetIfGreater {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     SetIfLess {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     SetIfGreaterOrEqual {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     SetIfLessOrEqual {
-        dst: Argument,
-        lhs: Argument,
-        rhs: Argument,
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        rhs: Argument<'src>,
     },
     Negate {
-        dst: Argument,
+        dst: Argument<'src>,
     },
     Label {
         label_id: LabelID,
@@ -97,34 +114,38 @@ pub enum OpCode {
         label_id: LabelID,
     },
     GotoIfZero {
-        condition: Argument,
+        condition: Argument<'src>,
         label_id: LabelID,
     },
     GotoIfNotZero {
-        condition: Argument,
+        condition: Argument<'src>,
         label_id: LabelID,
     },
     Call {
-        dst: Argument,
-        lhs: Argument,
-        arguments: Vec<Argument>,
-    }
+        dst: Argument<'src>,
+        lhs: Argument<'src>,
+        arguments: Vec<Argument<'src>>,
+    },
 }
 
 #[derive(Debug)]
 pub struct Function<'src> {
     pub name: &'src str,
     pub labels: LabelID,
-    pub return_type: DataType,
-    pub argument_types: Vec<DataType>,
+    pub return_type: DataType<'src>,
+    pub argument_types: Vec<DataType<'src>>,
     pub arguments_size: usize,
-    pub register_types: Vec<DataType>,
+    pub register_types: Vec<DataType<'src>>,
     pub registers_size: usize,
-    pub opcodes: Vec<OpCode>,
+    pub opcodes: Vec<OpCode<'src>>,
 }
 
 impl<'src> Function<'src> {
-    pub fn new(name: &'src str, return_type: DataType, argument_types: Vec<DataType>) -> Self {
+    pub fn new(
+        name: &'src str,
+        return_type: DataType<'src>,
+        argument_types: Vec<DataType<'src>>,
+    ) -> Self {
         let arguments_size = argument_types
             .iter()
             .map(|data_type| data_type.size_aligned())
@@ -146,7 +167,7 @@ impl<'src> Function<'src> {
         self.arguments_size + self.registers_size
     }
 
-    pub fn add_register(&mut self, data_type: DataType) -> RegisterID {
+    pub fn add_register(&mut self, data_type: DataType<'src>) -> RegisterID {
         self.registers_size += data_type.size_aligned();
 
         self.register_types.push(data_type);
@@ -162,7 +183,7 @@ impl<'src> Function<'src> {
         prev_labels
     }
 
-    pub fn add_opcode(&mut self, opcode: OpCode) {
+    pub fn add_opcode(&mut self, opcode: OpCode<'src>) {
         self.opcodes.push(opcode);
     }
 
@@ -182,11 +203,24 @@ impl<'src> Function<'src> {
             .sum::<usize>()
     }
 
-    pub fn argument_data_type(&self, argument: &'src Argument) -> &DataType {
+    pub fn argument_data_type(&self, argument: &'src Argument<'src>) -> &DataType<'src> {
         match argument {
             Argument::ReturnValue => &self.return_type,
             Argument::Register(register_id) => &self.register_types[*register_id],
             Argument::Argument(argument_id) => &self.argument_types[*argument_id],
+            Argument::Deref(deref) => {
+                let DataType::Ref(ref deref) = self.argument_data_type(deref) else { panic!() };
+
+                deref
+            }
+            Argument::StructField { data, name } => {
+                let DataType::Struct(ref fields) = self.argument_data_type(data) else { panic!() };
+
+                fields
+                    .iter()
+                    .find(|(find_name, _)| find_name == name)
+                    .map_or_else(|| panic!(), |(_, data_type)| data_type)
+            }
             Argument::Constant { data_type, .. } | Argument::Symbol { data_type, .. } => data_type,
             Argument::VoidRegister => unreachable!(),
         }
@@ -213,7 +247,9 @@ impl<'src> ByteCode<'src> {
         self.strings.len() - 1
     }
 
-    pub fn string_symbol_name(id: usize) -> String { format!("str_{id}") }
+    pub fn string_symbol_name(id: usize) -> String {
+        format!("str_{id}")
+    }
 }
 
 pub trait CodeGenerator<'src> {

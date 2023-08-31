@@ -1,11 +1,17 @@
 use crate::{
-    bytecode::RegisterID,
     parser::{Token, TokenKind},
     symbol_table::SymbolTable,
     types::DataType,
     CompilerResult,
 };
 use std::cmp::Eq;
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct VariableDeclaration<'src> {
+    pub name: &'src str,
+    pub data_type: DataType<'src>,
+    pub value: Option<Box<Ast<'src>>>,
+}
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum AstKind<'src> {
@@ -29,22 +35,25 @@ pub enum AstKind<'src> {
         lhs: Box<Ast<'src>>,
         rhs: Box<Ast<'src>>,
     },
+    GetField {
+        lhs: Box<Ast<'src>>,
+        name: &'src str,
+    },
     Block {
         scope_id: usize,
         statements: Vec<Ast<'src>>,
     },
-    Declaration {
-        name: &'src str,
-        data_type: DataType,
-        argument_id: Option<RegisterID>,
-        value: Option<Box<Ast<'src>>>,
-    },
+    VariableDeclaration(VariableDeclaration<'src>),
     FunctionDeclaration {
         name: &'src str,
         scope_id: usize,
-        return_type: DataType,
-        arguments: Vec<Ast<'src>>,
+        return_type: DataType<'src>,
+        arguments: Vec<VariableDeclaration<'src>>,
         body: Box<Ast<'src>>,
+    },
+    StructDeclaration {
+        name: &'src str,
+        fields: Vec<VariableDeclaration<'src>>,
     },
     Call {
         lhs: Box<Ast<'src>>,
@@ -77,13 +86,14 @@ impl<'src> AstKind<'src> {
                 },
                 ..
             } | Self::Index { .. }
+                | Self::GetField { .. }
         )
     }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Ast<'src> {
-    pub data_type: DataType,
+    pub data_type: DataType<'src>,
     pub kind: AstKind<'src>,
 }
 

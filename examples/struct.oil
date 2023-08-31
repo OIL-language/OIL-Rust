@@ -1,0 +1,97 @@
+{
+    fn strlen(let text: String): U64 {
+        let i: U64 = 0;
+
+        while text[i] > 0 {
+            i = i + 1;
+        };
+
+        i;
+    };
+
+    fn print_len(let text: String) { print(text, strlen(text)); };
+
+    fn strcpy(let dst: String, let src: String, let len: U64) {
+        let i: U64 = 0;
+
+        while i < len {
+            dst[i] = src[i];
+
+            i = i + 1;
+        };
+    };
+
+    fn realloc(let old_block: #String, let old_size: U64, let new_size: U64) {
+        let new_block: String = malloc(new_size);
+
+        strcpy(new_block, @old_block, old_size);
+
+        free(@old_block, old_size);
+        @old_block = new_block;
+    };
+
+    struct DString {
+        let text: #U8;
+        let len: U64;
+        let cap: U64;
+    };
+
+    fn DString_from(let string: String): DString {
+        let dstring: DString;
+
+        dstring.len = strlen(string);
+        dstring.cap = 1;
+
+        while dstring.cap < dstring.len {
+            dstring.cap = dstring.cap * 2;
+        };
+
+        dstring.text = malloc(dstring.cap);
+        strcpy(dstring.text, string, dstring.len);
+
+        dstring;
+    };
+
+    fn DString_pop(let dstring: #DString) {
+        if (@dstring).len == 0 {
+            print_len("Error, tried to pop from empty string");
+        };
+
+        (@dstring).len = (@dstring).len - 1;
+    };
+
+    fn DString_append(let dstring: #DString, let ch: U8) {
+        if (@dstring).len >= (@dstring).cap {
+            let old_size: U64 = (@dstring).cap;
+
+            (@dstring).cap = (@dstring).cap * 2;
+
+            realloc(#(@dstring).text, old_size, (@dstring).cap);
+        };
+
+        (@dstring).text[(@dstring).len] = ch;
+
+        (@dstring).len = (@dstring).len + 1;
+    };
+
+    fn DString_free(let dstring: #DString) {
+        free((@dstring).text, (@dstring).cap);
+    };
+
+    let string: DString = DString_from("Hello, World!\n");
+
+    let i: U64 = 0;
+    while i < 1000000 {
+        DString_append(#string, 65);
+        DString_append(#string, 66);
+        DString_append(#string, 67);
+
+        i = i + 1;
+    };
+
+    print(string.text, string.len);
+
+    DString_free(#string);
+
+    0;
+}
