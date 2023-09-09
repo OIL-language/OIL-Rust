@@ -64,6 +64,18 @@ impl NasmRegister {
     }
 }
 
+const READ_CODE: &str = "\
+read:
+    enter 0, 0
+    mov rax, 0x0        ; syscall read
+    mov rdi, 0x0        ; stdin
+    mov rsi, [rbp + 24] ; text
+    mov rdx, [rbp + 16] ; length
+    syscall
+    leave
+    ret
+";
+
 const PRINT_CODE: &str = "\
 print:
     enter 0, 0
@@ -528,7 +540,7 @@ impl Nasm {
 impl<'src> CodeGenerator<'src> for Nasm {
     fn generate(bytecode: &ByteCode<'src>) -> Result<String, fmt::Error> {
         let mut nasm = Self {
-            text: format!("[BITS 64]\nglobal _start\nsection .text\n{MALLOC_CODE}{FREE_CODE}{PRINT_CODE}{ENTRY_CODE}"),
+            text: format!("[BITS 64]\nglobal _start\nsection .text\n{MALLOC_CODE}{FREE_CODE}{READ_CODE}{PRINT_CODE}{ENTRY_CODE}"),
         };
 
         for function in &bytecode.functions {

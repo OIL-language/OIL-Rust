@@ -111,6 +111,17 @@ impl<'src> Default for SymbolTable<'src> {
         };
 
         symbol_table.add_symbol(
+            "read",
+            Symbol::Variable(DataType::Function {
+                return_type: Box::new(DataType::Void),
+                argument_types: vec![
+                    DataType::Ref(Box::new(DataType::Int(IntType::U8))),
+                    DataType::Int(IntType::U64),
+                ],
+            }),
+        );
+
+        symbol_table.add_symbol(
             "print",
             Symbol::Variable(DataType::Function {
                 return_type: Box::new(DataType::Void),

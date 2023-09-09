@@ -301,7 +301,19 @@ impl<'src> Parser<'src> {
                     '+' => TokenKind::Add,
                     '-' => TokenKind::Sub,
                     '*' => TokenKind::Mul,
-                    '/' => TokenKind::Div,
+                    '/' => {
+                        if self.peeking_char(|ch| ch == '/') {
+                            self.advance(&mut pos);
+
+                            while self.peeking_char(|ch| ch != '\n') {
+                                self.advance(&mut pos);
+                            };
+
+                            continue;
+                        } else {
+                            TokenKind::Div
+                        }
+                    },
                     '%' => TokenKind::Mod,
                     '=' => {
                         if self.peeking_char(|ch| ch == '=') {
@@ -647,7 +659,13 @@ impl<'src> Parser<'src> {
         let else_block = if self.peeking_token(TokenKind::Else)? {
             self.next_token()?;
 
-            Some(Box::new(self.parse_block(symbol_table)?))
+            let block = if self.peeking_token(TokenKind::If)? {
+                self.parse_if_statement(symbol_table)?
+            } else {
+                self.parse_block(symbol_table)?
+            };
+
+            Some(Box::new(block))
         } else {
             None
         };

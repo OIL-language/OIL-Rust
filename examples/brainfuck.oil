@@ -1,0 +1,103 @@
+{
+    fn strlen(let text: String): U64 {
+        let i: U64 = 0;
+
+        while text[i] > 0 {
+            i = i + 1;
+        };
+
+        i;
+    };
+
+    fn print_len(let text: String) { print(text, strlen(text)); };
+
+    let code: String = "++++++++[>++++++++<-]>[<++++>-]+<[>-<[>++++<-]>[<++++++++>-]<[>++++++++<-]+>[>++++++++++[>+++++<-]>+.-.[-]<<[-]<->]<[>>+++++++[>+++++++<-]>.+++++.[-]<<<-]]>[>++++++++[>+++++++<-]>.[-]<<-]<+++++++++++[>+++>+++++++++>+++++++++>+<<<<-]>-.>-.+++++++.+++++++++++.<. .++.+++++++..<-.>>-[[-]<]";
+    let code_len: U64 = strlen(code);
+
+    let cell_ptr: U64 = 0;
+    let cell_size: U64 = 300;
+    let cells: #U8 = malloc(cell_size);
+
+    {
+        let i: U64 = 0;
+        while i < cell_size {
+            cells[i] = 0;
+            i = i + 1;
+        };
+    };
+
+    {
+        let i: U64 = 0;
+
+        while i < code_len {
+            let ch: U8 = code[i];
+
+            if ch == 43 {
+                cells[cell_ptr] = cells[cell_ptr] + 1;
+                i = i + 1;
+            } else if ch == 44 {
+                let ch: U8;
+                read(#ch, 1);
+                cells[cell_ptr] = ch;
+                i = i + 1;
+            } else if ch == 45 {
+                cells[cell_ptr] = cells[cell_ptr] - 1;
+                i = i + 1;
+            } else if ch == 46 {
+                print(#cells[cell_ptr], 1);
+                i = i + 1;
+            } else if ch == 62 {
+                cell_ptr = cell_ptr + 1;
+                i = i + 1;
+            } else if ch == 60 {
+                cell_ptr = cell_ptr - 1;
+                i = i + 1;
+            } else if ch == 91 {
+                i = i + 1;
+                if cells[cell_ptr] == 0 {
+                    let bracket_count: U64 = 1;
+
+                    while bracket_count > 0 {
+                        if i >= code_len {
+                            print_len("Parse error: front bracket mismatched.\n");
+                        } else {
+                            i = i + 1;
+                        };
+
+                        if code[i] == 91 {
+                            bracket_count = bracket_count + 1;
+                        } else if code[i] == 93 {
+                            bracket_count = bracket_count - 1;
+                        };
+                    };
+                };
+            } else if ch == 93 {
+                if cells[cell_ptr] != 0 {
+                    let bracket_count: U64 = 1;
+
+                    while bracket_count > 0 {
+                        if i == 0 {
+                            print_len("Parse error: end bracket mismatched.\n");
+                        } else {
+                            i = i - 1;
+                        };
+
+                        if code[i] == 91 {
+                            bracket_count = bracket_count - 1;
+                        } else if code[i] == 93 {
+                            bracket_count = bracket_count + 1;
+                        };
+                    };
+                } else {
+                    i = i + 1;
+                };
+            } else {
+                i = i + 1;
+            };
+        };
+    };
+
+    free(cells, cell_size);
+
+    0;
+}

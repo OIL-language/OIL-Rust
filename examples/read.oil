@@ -1,0 +1,23 @@
+{
+    fn strlen(let text: String): U64 {
+        let i: U64 = 0;
+
+        while text[i] > 0 {
+            i = i + 1;
+        };
+
+        i;
+    };
+
+    let MAX_SIZE: U64 = 512;
+    let a: #U8 = malloc(MAX_SIZE);
+
+    print("Enter your name:\n", 17);
+    read(a, MAX_SIZE);
+    print("Hello, ", 7);
+    print(a, strlen(a) - 1);
+    print("!\n", 2);
+    free(a, MAX_SIZE);
+
+    0;
+}
