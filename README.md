@@ -17,7 +17,7 @@ fn main() {
                 .each(fn (let (name, multiple): (String, U64)) {
                     if i % multiple == 0 {
                         any_conditions = true;
-                        STDOUT.print(i);
+                        STDOUT.print(name);
                     }
                 });
 
